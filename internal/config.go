@@ -95,10 +95,7 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	// Expand environment variables (e.g., $API_KEY or ${API_KEY})
-	expanded := os.ExpandEnv(string(content))
-
-	if err := toml.Unmarshal([]byte(expanded), &cfg); err != nil {
+	if err := toml.Unmarshal(content, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
@@ -107,6 +104,15 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	for i, provider := range cfg.Providers {
+		cfg.Providers[i].APIKey = os.ExpandEnv(provider.APIKey)
+		if len(provider.Headers) > 0 {
+			expandedHeaders := make(map[string]string, len(provider.Headers))
+			for k, v := range provider.Headers {
+				expandedHeaders[k] = os.ExpandEnv(v)
+			}
+			cfg.Providers[i].Headers = expandedHeaders
+		}
+
 		if strings.TrimSpace(provider.BaseURL) == "" {
 			return cfg, fmt.Errorf("config.providers[%d].base_url is required", i)
 		}

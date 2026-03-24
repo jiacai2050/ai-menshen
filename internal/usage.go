@@ -73,69 +73,41 @@ func extractUsageFromSSELine(requestID string, line []byte) (*UsageLog, error) {
 	return extractUsageFromJSON(requestID, payload)
 }
 
-func extractUsageFromJSON(requestID string, body []byte) (*UsageLog, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
+type usageResponse struct {
+	Usage *usageData `json:"usage"`
+}
 
-	var payload map[string]any
-	if err := decoder.Decode(&payload); err != nil {
+type usageData struct {
+	PromptTokens     int64               `json:"prompt_tokens"`
+	CompletionTokens int64               `json:"completion_tokens"`
+	TotalTokens      int64               `json:"total_tokens"`
+	PromptDetails    *promptTokenDetails `json:"prompt_tokens_details"`
+}
+
+type promptTokenDetails struct {
+	CachedTokens int64 `json:"cached_tokens"`
+}
+
+func extractUsageFromJSON(requestID string, body []byte) (*UsageLog, error) {
+	var resp usageResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, nil
 	}
 
-	return usageFromPayload(requestID, payload), nil
-}
-
-func usageFromPayload(requestID string, payload map[string]any) *UsageLog {
-	usageObject, ok := payload["usage"].(map[string]any)
-	if !ok {
-		return nil
+	if resp.Usage == nil {
+		return nil, nil
 	}
 
-	usage := &UsageLog{RequestID: requestID}
-	var hasValue bool
-
-	if value, ok := int64Value(usageObject["prompt_tokens"]); ok {
-		usage.PromptTokens = &value
-		hasValue = true
-	}
-	if value, ok := int64Value(usageObject["completion_tokens"]); ok {
-		usage.CompletionTokens = &value
-		hasValue = true
-	}
-	if value, ok := int64Value(usageObject["total_tokens"]); ok {
-		usage.TotalTokens = &value
-		hasValue = true
+	usage := &UsageLog{
+		RequestID:        requestID,
+		PromptTokens:     &resp.Usage.PromptTokens,
+		CompletionTokens: &resp.Usage.CompletionTokens,
+		TotalTokens:      &resp.Usage.TotalTokens,
 	}
 
-	if details, ok := usageObject["prompt_tokens_details"].(map[string]any); ok {
-		if value, ok := int64Value(details["cached_tokens"]); ok {
-			usage.CachedTokens = &value
-			hasValue = true
-		}
+	if resp.Usage.PromptDetails != nil {
+		usage.CachedTokens = &resp.Usage.PromptDetails.CachedTokens
 	}
 
-	if !hasValue {
-		return nil
-	}
-
-	return usage
-}
-
-func int64Value(value any) (int64, bool) {
-	switch typed := value.(type) {
-	case json.Number:
-		number, err := typed.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return number, true
-	case float64:
-		return int64(typed), true
-	case int:
-		return int64(typed), true
-	case int64:
-		return typed, true
-	default:
-		return 0, false
-	}
+	return usage, nil
 }

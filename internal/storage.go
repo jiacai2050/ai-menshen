@@ -11,7 +11,15 @@ import (
 )
 
 type Storage struct {
-	db *sql.DB
+	db     *sql.DB
+	queue  chan exchangeTask
+	closed chan struct{}
+}
+
+type exchangeTask struct {
+	request  RequestLog
+	response ResponseLog
+	usage    *UsageLog
 }
 
 func OpenStorage(path string) (*Storage, error) {
@@ -24,20 +32,38 @@ func OpenStorage(path string) (*Storage, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(0)
+	// In WAL mode, SQLite supports multiple readers and one writer.
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
 
-	storage := &Storage{db: db}
+	storage := &Storage{
+		db:     db,
+		queue:  make(chan exchangeTask, 1024),
+		closed: make(chan struct{}),
+	}
 	if err := storage.init(); err != nil {
 		db.Close()
 		return nil, err
 	}
 
+	go storage.worker()
+
 	return storage, nil
 }
 
+func (s *Storage) worker() {
+	defer close(s.closed)
+	for task := range s.queue {
+		if err := s.saveExchangeSync(task.request, task.response, task.usage); err != nil {
+			fmt.Fprintf(os.Stderr, "sqlite worker error: %v\n", err)
+		}
+	}
+}
+
 func (s *Storage) Close() error {
+	close(s.queue)
+	<-s.closed
 	return s.db.Close()
 }
 
@@ -86,6 +112,16 @@ func (s *Storage) init() error {
 }
 
 func (s *Storage) SaveExchange(request RequestLog, response ResponseLog, usage *UsageLog) error {
+	select {
+	case s.queue <- exchangeTask{request, response, usage}:
+		return nil
+	default:
+		// Drop the log if the queue is full to avoid blocking the request path
+		return fmt.Errorf("storage queue full, dropping log for %s", request.ID)
+	}
+}
+
+func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usage *UsageLog) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin sqlite transaction: %w", err)

@@ -89,36 +89,50 @@ response = client.chat.completions.create(
 curl http://localhost:8080/__report/models
 ```
 
-## Cloudflare AI Gateway (BYOK)
+## Configuration Guide
 
-If you use Cloudflare AI Gateway with [Bring Your Own Keys (BYOK)](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/), you must provide your provider key via the `cf-aig-authorization` header. 
+Create a `config.toml` file to customize ai-menshen's behavior. You can find a complete template in [configs/example.toml](configs/example.toml).
 
-You can configure this using the `headers` map in `ai-menshen`:
+### Global Settings
+- `listen`: The address and port to listen on (default: `:8080`).
+- `verbose`: Enable debug logging to stdout (default: `false`).
 
+### `[[providers]]` (Array)
+- `base_url`: Upstream OpenAI-compatible API endpoint (required).
+- `api_key`: Your API key for the provider. Supports environment variables.
+- `headers`: A map of custom HTTP headers to inject into upstream requests. Values support environment variables.
+- `model`: Optional. If set, it overrides the `model` field in all incoming requests.
+
+**Example: Cloudflare AI Gateway (BYOK)**
 ```toml
 [[providers]]
-# Replace with your gateway's OpenAI endpoint
 base_url = "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/GATEWAY_NAME/openai"
-# Inject the BYOK header
-headers = { "cf-aig-authorization" = "Bearer sk-..." }
+headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
 ```
 
-## Configuration (config.toml)
+### `[storage]`
+- `sqlite_path`: Path to the SQLite database file (default: `./data/ai-menshen.db`).
+- `retention_days`: Number of days to keep audit logs (default: `30`).
 
-ai-menshen supports environment variable expansion (e.g., `${API_KEY}`) within your `config.toml`, making it easy to keep your secrets out of the configuration file.
+### `[cache]`
+- `enable`: Enable response caching for non-stream requests (default: `true`).
+- `max_body_bytes`: Maximum response size to cache in bytes (default: `1MB`).
 
+### `[logging]`
+- `log_request_body`: Store the full request body in SQLite (default: `true`).
+- `log_response_body`: Store the full response body in SQLite (default: `true`).
+
+## Environment Variables
+
+ai-menshen supports environment variable expansion (e.g., `${API_KEY}` or `$API_KEY`) for sensitive fields in `config.toml`. This allows you to keep your secrets out of the configuration file.
+
+Supported fields:
+- `api_key`
+- Values within the `headers` map
+
+Example:
 ```toml
-listen = ":8080"
-
 [[providers]]
-base_url = "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/GATEWAY_NAME/openai"
-# Custom headers (BYOK for Cloudflare)
-headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
-model = "gpt-4o"
-
-[storage]
-sqlite_path = "./data/ai-menshen.db"
-
-[cache]
-enable = true
+api_key = "${OPENAI_API_KEY}"
+headers = { "X-Custom-Auth" = "$CUSTOM_TOKEN" }
 ```

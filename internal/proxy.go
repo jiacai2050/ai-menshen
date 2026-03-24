@@ -160,7 +160,8 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose {
 		captured = &bytes.Buffer{}
 	}
-	buffer := make([]byte, 32*1024)
+	// Use a fixed sized buffer for streaming to keep memory overhead predictable
+	buffer := make([]byte, 16*1024)
 
 	for {
 		n, readErr := resp.Body.Read(buffer)
@@ -177,7 +178,10 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 				log.Printf("stream usage extraction failed: %v", err)
 			}
 			if captured != nil {
-				_, _ = captured.Write(chunk)
+				// Don't capture more than 1MB to avoid memory blow-up
+				if captured.Len() < 1024*1024 {
+					_, _ = captured.Write(chunk)
+				}
 			}
 		}
 
@@ -286,15 +290,17 @@ func (g *Gateway) forwardUpstream(r *http.Request, body []byte) (*http.Response,
 }
 
 func (g *Gateway) applyProviderHeaders(headers http.Header) {
+	// 1. Always clear the client's standard Authorization
 	headers.Del(authHeaderName)
 
-	if len(g.provider.Headers) > 0 {
-		for k, v := range g.provider.Headers {
-			headers.Del(k)
-			headers.Set(k, v)
-		}
-	} else if g.provider.APIKey != "" {
+	// 2. Apply APIKey if present
+	if g.provider.APIKey != "" {
 		headers.Set(authHeaderName, "Bearer "+g.provider.APIKey)
+	}
+
+	// 3. Apply custom headers (can override Authorization if specified)
+	for k, v := range g.provider.Headers {
+		headers.Set(k, v)
 	}
 }
 
