@@ -22,9 +22,10 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
-	Model   string `toml:"model"`
+	BaseURL string            `toml:"base_url"`
+	APIKey  string            `toml:"api_key"`
+	Headers map[string]string `toml:"headers"`
+	Model   string            `toml:"model"`
 }
 
 type StorageConfig struct {
@@ -94,7 +95,10 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	if err := toml.Unmarshal(content, &cfg); err != nil {
+	// Expand environment variables (e.g., $API_KEY or ${API_KEY})
+	expanded := os.ExpandEnv(string(content))
+
+	if err := toml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
@@ -105,9 +109,6 @@ func LoadConfig(path string) (Config, error) {
 	for i, provider := range cfg.Providers {
 		if strings.TrimSpace(provider.BaseURL) == "" {
 			return cfg, fmt.Errorf("config.providers[%d].base_url is required", i)
-		}
-		if strings.TrimSpace(provider.APIKey) == "" {
-			return cfg, fmt.Errorf("config.providers[%d].api_key is required", i)
 		}
 
 		parsed, err := url.Parse(provider.BaseURL)

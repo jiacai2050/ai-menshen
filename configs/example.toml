@@ -3,9 +3,11 @@ verbose = false
 
 [[providers]]
 base_url = "https://api.openai.com/v1"
-api_key = "sk-..."
-# If model is set, it will be used to overwrite model in requests.
+api_key = "${OPENAI_API_KEY}"
+# Optional: override the client's model before forwarding upstream.
 # model = "gpt-4.1"
+# Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
+# headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
 
 [storage]
 sqlite_path = "./data/menshen.db"

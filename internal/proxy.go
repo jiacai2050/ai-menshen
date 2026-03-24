@@ -16,7 +16,6 @@ import (
 
 const (
 	authHeaderName   = "Authorization"
-	cfAuthHeaderName = "cf-aig-authorization"
 	reportModelsPath = "/__report/models"
 )
 
@@ -33,10 +32,6 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 		provider: cfg.PrimaryProvider(),
 		storage:  storage,
 		client:   &http.Client{Transport: http.DefaultTransport},
-	}
-
-	if cfg.Verbose {
-		log.Printf("Using auth header %q", service.authHeaderName())
 	}
 
 	return service, nil
@@ -277,8 +272,8 @@ func (g *Gateway) forwardUpstream(r *http.Request, body []byte) (*http.Response,
 		return nil, 0, fmt.Errorf("create upstream request: %w", err)
 	}
 
-	copyRequestHeaders(upstreamRequest.Header, r.Header)
-	applyProviderAuthHeader(upstreamRequest.Header, g.provider)
+	g.copyRequestHeaders(upstreamRequest.Header, r.Header)
+	g.applyProviderHeaders(upstreamRequest.Header)
 
 	startedAt := time.Now()
 	resp, err := g.client.Do(upstreamRequest)
@@ -290,32 +285,17 @@ func (g *Gateway) forwardUpstream(r *http.Request, body []byte) (*http.Response,
 	return resp, duration, nil
 }
 
-func (g *Gateway) authHeaderName() string {
-	parsed, err := url.Parse(g.provider.BaseURL)
-	if err != nil {
-		return authHeaderName
-	}
-	if parsed.Host == "gateway.ai.cloudflare.com" {
-		return cfAuthHeaderName
-	}
-	return authHeaderName
-}
-
-func applyProviderAuthHeader(headers http.Header, provider ProviderConfig) {
+func (g *Gateway) applyProviderHeaders(headers http.Header) {
 	headers.Del(authHeaderName)
-	headers.Del(cfAuthHeaderName)
-	headers.Set(providerAuthHeaderName(provider.BaseURL), "Bearer "+provider.APIKey)
-}
 
-func providerAuthHeaderName(baseURL string) string {
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return authHeaderName
+	if len(g.provider.Headers) > 0 {
+		for k, v := range g.provider.Headers {
+			headers.Del(k)
+			headers.Set(k, v)
+		}
+	} else if g.provider.APIKey != "" {
+		headers.Set(authHeaderName, "Bearer "+g.provider.APIKey)
 	}
-	if parsed.Host == "gateway.ai.cloudflare.com" {
-		return cfAuthHeaderName
-	}
-	return authHeaderName
 }
 
 func buildUpstreamURL(baseURL string, incoming *url.URL) (string, error) {
@@ -345,12 +325,12 @@ func joinURLPath(basePath, requestPath string) string {
 	}
 }
 
-func copyRequestHeaders(dst, src http.Header) {
+func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
 	for key, values := range src {
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if strings.EqualFold(key, authHeaderName) || strings.EqualFold(key, cfAuthHeaderName) {
+		if g.isProviderHeader(key) {
 			continue
 		}
 		if strings.EqualFold(key, "Accept-Encoding") {
@@ -361,6 +341,18 @@ func copyRequestHeaders(dst, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func (g *Gateway) isProviderHeader(key string) bool {
+	if strings.EqualFold(key, authHeaderName) {
+		return true
+	}
+	for k := range g.provider.Headers {
+		if strings.EqualFold(key, k) {
+			return true
+		}
+	}
+	return false
 }
 
 func copyResponseHeaders(dst, src http.Header) {

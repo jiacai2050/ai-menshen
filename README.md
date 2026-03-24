@@ -1,20 +1,17 @@
 # ai-menshen
 
-ai-menshen is a lightweight, local-first Go proxy for OpenAI-compatible APIs, designed to keep auditing, caching, and usage reporting under your control.
-
-The name **menshen** (门神) comes from Chinese culture. A *menshen* is a "door guardian" or "gate guardian" figure placed at an entrance to protect what is behind it. That fits this project well: ai-menshen stands in front of an upstream AI provider, guards the real API key, and decides how requests should pass through.
+ai-menshen (门神) is a lightweight, local-first Go proxy for OpenAI-compatible APIs. It stands in front of upstream providers to keep auditing, caching, and API keys under your absolute control.
 
 > Pairs great with [OpenClaw](https://openclaw.ai/) 🦞.
 
-## Features
+## Core Features
 
-- **Provider config via TOML**: load upstream settings from `config.toml`.
-- **Auth injection**: keep real upstream API keys on the server.
-- **Provider model override**: optionally replace the client-supplied `model` with `providers[0].model`.
-- **Auditing**: persist request, response, latency, and token usage to SQLite.
-- **Optional cache replay**: reuse previous non-stream responses for matching requests.
-- **Usage reporting**: query model-level token totals at `GET /__report/models`.
-- **Stream support**: `stream=true` is forwarded incrementally, recorded in SQLite, and can contribute usage stats when the stream includes usage data.
+- **Auth Injection**: Keep real upstream API keys safe in your local config.
+- **Model Override**: Force specific models (e.g., `gpt-4o`) regardless of client request.
+- **Auditing**: Log every request, response, and token usage to a local **SQLite** database.
+- **Smart Cache**: Instant replay for matching non-stream requests to save costs.
+- **Stream Support**: Full SSE support with real-time token usage extraction.
+- **Usage Reports**: Model-level token totals via `GET /__report/models`.
 
 ## How It Works
 
@@ -36,8 +33,6 @@ flowchart TD
     style D fill:#e6ffe6,stroke:#009900,stroke-width:2px
     style F fill:#d1e7dd,stroke:#198754,stroke-width:2px
 ```
-
-In short: ai-menshen acts as a smart gateway that injects credentials, optionally overrides models, reuses cached responses from SQLite, and logs every exchange for usage reporting.
 
 ## Architecture
 
@@ -62,125 +57,68 @@ flowchart LR
     C <== "OpenAI API" ==> G
     G <== "Auth Injection" ==> U
 
-    %% Styling
     style EXTERNAL fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
     style LOCAL fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
     style G fill:#fff,stroke:#0066cc,stroke-width:2px
 ```
 
-This structural view highlights `ai-menshen` as the secure local bridge, keeping all sensitive data (API keys, audit logs, and cache) strictly within **Your Local Environment**.
-
-## Configuration
-
-Create a `config.toml` file, or start from `configs/config.example.toml`:
-
-```toml
-listen = ":8080"
-verbose = false
-
-[[providers]]
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."
-# Optional: override the client's model before forwarding upstream.
-# model = "gpt-4.1"
-
-[storage]
-sqlite_path = "./data/ai-menshen.db"
-retention_days = 30
-
-[cache]
-enable = true
-max_body_bytes = 1048576
-
-[logging]
-log_request_body = true
-log_response_body = true
-```
-
-Notes:
-
-- `providers` is an array for future expansion, but the current implementation only uses `providers[0]`.
-- If `providers[0].model` is set, that value replaces the incoming request's `model`.
-- SQLite data is stored at `storage.sqlite_path`.
-- The repository keeps the example config in `configs/config.example.toml`.
-
 ## Quick Start
 
-### 1. Run
-
+### 1. Configure & Run
 ```bash
-cp configs/config.example.toml ./config.toml
-
+cp configs/example.toml config.toml
+# Edit config.toml with your api_key and base_url
 go run ./cmd/ai-menshen
-
-# show CLI help
-go run ./cmd/ai-menshen -h
-
-# pass a custom config path
-go run ./cmd/ai-menshen -config ./config.toml
 ```
 
-### 2. Build
-
-```bash
-make build
-```
-
-### 3. Connect a Client
-
-#### OpenAI Python SDK
-
-ai-menshen still speaks the normal OpenAI-compatible HTTP API. Clients only need to point `base_url` at the local service; the upstream key stays in `config.toml`.
+### 2. Connect Your Client
+Point your OpenAI client to `http://localhost:8080`.
 
 ```python
 from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080",
-    api_key="local-placeholder"
-)
+client = OpenAI(base_url="http://localhost:8080", api_key="local-placeholder")
 
 response = client.chat.completions.create(
-    model="gpt-4.1-mini",
-    messages=[{"role": "user", "content": "Hello via ai-menshen!"}]
+    model="any-model", # Will be overridden if config.model is set
+    messages=[{"role": "user", "content": "Hello!"}]
 )
-print(response.choices[0].message.content)
 ```
 
-#### curl
-
-```bash
-curl http://localhost:8080/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"Hi!"}]}'
-```
-
-## Reports
-
-Fetch aggregated usage by model:
-
+### 3. Check Reports
 ```bash
 curl http://localhost:8080/__report/models
 ```
 
-Example response:
+## Cloudflare AI Gateway (BYOK)
 
-```json
-[
-  {
-    "model": "gpt-4.1",
-    "request_count": 12,
-    "cache_hits": 3,
-    "prompt_tokens": 240,
-    "completion_tokens": 1900,
-    "total_tokens": 2140,
-    "cached_tokens": 80
-  }
-]
+If you use Cloudflare AI Gateway with [Bring Your Own Keys (BYOK)](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/), you must provide your provider key via the `cf-aig-authorization` header. 
+
+You can configure this using the `headers` map in `ai-menshen`:
+
+```toml
+[[providers]]
+# Replace with your gateway's OpenAI endpoint
+base_url = "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/GATEWAY_NAME/openai"
+# Inject the BYOK header
+headers = { "cf-aig-authorization" = "Bearer sk-..." }
 ```
 
-## Current Scope
+## Configuration (config.toml)
 
-- Auditing applies to both non-stream and stream requests.
-- Stream requests are forwarded incrementally and can record usage from SSE `data:` events that include a `usage` object.
-- Cache replay is still limited to supported **non-stream** JSON endpoints such as `/chat/completions` and `/responses`.
+ai-menshen supports environment variable expansion (e.g., `${API_KEY}`) within your `config.toml`, making it easy to keep your secrets out of the configuration file.
+
+```toml
+listen = ":8080"
+
+[[providers]]
+base_url = "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/GATEWAY_NAME/openai"
+# Custom headers (BYOK for Cloudflare)
+headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
+model = "gpt-4o"
+
+[storage]
+sqlite_path = "./data/ai-menshen.db"
+
+[cache]
+enable = true
+```
