@@ -79,7 +79,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8080", api_key="local-placeholder")
 
 response = client.chat.completions.create(
-    model="any-model", # Will be overridden if config.model is set
+    model="any-model", # Will be overridden if a provider model is set in config.toml ([[providers]].model)
     messages=[{"role": "user", "content": "Hello!"}]
 )
 ```
