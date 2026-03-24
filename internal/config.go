@@ -22,9 +22,10 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
-	Model   string `toml:"model"`
+	BaseURL string            `toml:"base_url"`
+	APIKey  string            `toml:"api_key"`
+	Headers map[string]string `toml:"headers"`
+	Model   string            `toml:"model"`
 }
 
 type StorageConfig struct {
@@ -103,11 +104,17 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	for i, provider := range cfg.Providers {
+		cfg.Providers[i].APIKey = os.ExpandEnv(provider.APIKey)
+		if len(provider.Headers) > 0 {
+			expandedHeaders := make(map[string]string, len(provider.Headers))
+			for k, v := range provider.Headers {
+				expandedHeaders[k] = os.ExpandEnv(v)
+			}
+			cfg.Providers[i].Headers = expandedHeaders
+		}
+
 		if strings.TrimSpace(provider.BaseURL) == "" {
 			return cfg, fmt.Errorf("config.providers[%d].base_url is required", i)
-		}
-		if strings.TrimSpace(provider.APIKey) == "" {
-			return cfg, fmt.Errorf("config.providers[%d].api_key is required", i)
 		}
 
 		parsed, err := url.Parse(provider.BaseURL)
