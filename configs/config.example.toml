@@ -1,0 +1,20 @@
+listen = ":8080"
+verbose = false
+
+[[providers]]
+base_url = "https://api.openai.com/v1"
+api_key = "sk-..."
+# If model is set, it will be used to overwrite model in requests.
+# model = "gpt-4.1"
+
+[storage]
+sqlite_path = "./data/menshen.db"
+retention_days = 30
+
+[cache]
+enable = true
+max_body_bytes = 1048576
+
+[logging]
+log_request_body = true
+log_response_body = true

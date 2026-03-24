@@ -1,0 +1,5 @@
+ai-menshen
+configs/config.toml
+*.db
+*.db-wal
+*.db-shm
