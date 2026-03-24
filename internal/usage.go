@@ -1,13 +1,79 @@
-package gateway
+package aimenshen
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
-	"strings"
 )
 
 func ExtractUsage(requestID string, body []byte) (*UsageLog, error) {
+	return extractUsageFromJSON(requestID, body)
+}
+
+type SSEUsageExtractor struct {
+	requestID string
+	pending   []byte
+	usage     *UsageLog
+}
+
+func NewSSEUsageExtractor(requestID string) *SSEUsageExtractor {
+	return &SSEUsageExtractor{requestID: requestID}
+}
+
+func (e *SSEUsageExtractor) Write(chunk []byte) error {
+	e.pending = append(e.pending, chunk...)
+
+	for {
+		index := bytes.IndexByte(e.pending, '\n')
+		if index < 0 {
+			return nil
+		}
+
+		line := bytes.TrimSpace(e.pending[:index])
+		e.pending = e.pending[index+1:]
+
+		if usage, err := extractUsageFromSSELine(e.requestID, line); err != nil {
+			return err
+		} else if usage != nil {
+			e.usage = usage
+		}
+	}
+}
+
+func (e *SSEUsageExtractor) Finalize() error {
+	if len(bytes.TrimSpace(e.pending)) == 0 {
+		return nil
+	}
+
+	usage, err := extractUsageFromSSELine(e.requestID, bytes.TrimSpace(e.pending))
+	if err != nil {
+		return err
+	}
+	if usage != nil {
+		e.usage = usage
+	}
+
+	e.pending = nil
+	return nil
+}
+
+func (e *SSEUsageExtractor) Usage() *UsageLog {
+	return e.usage
+}
+
+func extractUsageFromSSELine(requestID string, line []byte) (*UsageLog, error) {
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return nil, nil
+	}
+
+	payload := bytes.TrimSpace(line[len("data:"):])
+	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return nil, nil
+	}
+
+	return extractUsageFromJSON(requestID, payload)
+}
+
+func extractUsageFromJSON(requestID string, body []byte) (*UsageLog, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 
@@ -17,42 +83,6 @@ func ExtractUsage(requestID string, body []byte) (*UsageLog, error) {
 	}
 
 	return usageFromPayload(requestID, payload), nil
-}
-
-func ExtractUsageFromSSE(requestID string, body []byte) (*UsageLog, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(body))
-	maxTokenSize := 1024 * 1024
-	scanner.Buffer(make([]byte, 0, 64*1024), maxTokenSize)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		payloadText := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payloadText == "" || payloadText == "[DONE]" {
-			continue
-		}
-
-		decoder := json.NewDecoder(strings.NewReader(payloadText))
-		decoder.UseNumber()
-
-		var payload map[string]any
-		if err := decoder.Decode(&payload); err != nil {
-			continue
-		}
-
-		if usage := usageFromPayload(requestID, payload); usage != nil {
-			return usage, nil
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
 }
 
 func usageFromPayload(requestID string, payload map[string]any) *UsageLog {

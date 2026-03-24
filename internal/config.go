@@ -1,4 +1,4 @@
-package gateway
+package aimenshen
 
 import (
 	"flag"
@@ -77,7 +77,7 @@ func LoadConfig(path string) (Config, error) {
 	cfg := Config{
 		Listen: ":8080",
 		Storage: StorageConfig{
-			SQLitePath:    "./data/gateway.db",
+			SQLitePath:    "./data/ai-menshen.db",
 			RetentionDays: 30,
 		},
 		Cache: CacheConfig{

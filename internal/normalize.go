@@ -1,4 +1,4 @@
-package gateway
+package aimenshen
 
 import (
 	"bytes"
@@ -11,8 +11,7 @@ import (
 
 func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestMeta, error) {
 	meta := RequestMeta{
-		OriginalBody:  append([]byte(nil), body...),
-		EffectiveBody: append([]byte(nil), body...),
+		EffectiveBody: body,
 	}
 
 	if len(body) == 0 {
@@ -24,9 +23,12 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 		return meta, nil
 	}
 
-	meta.JSON = true
+	needsMarshal := false
 	if provider.Model != "" {
-		payload["model"] = provider.Model
+		if current, ok := payload["model"].(string); !ok || current != provider.Model {
+			payload["model"] = provider.Model
+			needsMarshal = true
+		}
 	}
 
 	if model, ok := payload["model"].(string); ok {
@@ -37,11 +39,13 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 		meta.Stream = stream
 	}
 
-	effectiveBody, err := json.Marshal(payload)
-	if err != nil {
-		return meta, fmt.Errorf("marshal effective request body: %w", err)
+	if needsMarshal {
+		effectiveBody, err := json.Marshal(payload)
+		if err != nil {
+			return meta, fmt.Errorf("marshal effective request body: %w", err)
+		}
+		meta.EffectiveBody = effectiveBody
 	}
-	meta.EffectiveBody = effectiveBody
 
 	if meta.Stream {
 		return meta, nil

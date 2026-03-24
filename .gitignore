@@ -1,4 +1,4 @@
-ai-menshen
+/ai-menshen
 configs/config.toml
 *.db
 *.db-wal

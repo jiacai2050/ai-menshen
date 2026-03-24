@@ -1,4 +1,4 @@
-package gateway
+package aimenshen
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ type Gateway struct {
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
-	gateway := &Gateway{
+	service := &Gateway{
 		cfg:      cfg,
 		provider: cfg.PrimaryProvider(),
 		storage:  storage,
@@ -36,10 +36,10 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 	}
 
 	if cfg.Verbose {
-		log.Printf("Using auth header %q", gateway.authHeaderName())
+		log.Printf("Using auth header %q", service.authHeaderName())
 	}
 
-	return gateway, nil
+	return service, nil
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +160,11 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
-	var captured bytes.Buffer
+	usageExtractor := NewSSEUsageExtractor(requestLog.ID)
+	var captured *bytes.Buffer
+	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose {
+		captured = &bytes.Buffer{}
+	}
 	buffer := make([]byte, 32*1024)
 
 	for {
@@ -174,7 +178,12 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 			if flusher != nil {
 				flusher.Flush()
 			}
-			_, _ = captured.Write(chunk)
+			if err := usageExtractor.Write(chunk); err != nil {
+				log.Printf("stream usage extraction failed: %v", err)
+			}
+			if captured != nil {
+				_, _ = captured.Write(chunk)
+			}
 		}
 
 		if readErr == io.EOF {
@@ -191,26 +200,28 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		elapsed = total
 	}
 
-	var usage *UsageLog
-	if captured.Len() > 0 {
+	if err := usageExtractor.Finalize(); err != nil {
+		log.Printf("stream usage extraction failed: %v", err)
+	}
+
+	if captured != nil && captured.Len() > 0 {
 		if g.cfg.Verbose {
 			log.Printf("Stream Response Body: %s", captured.String())
 		}
-		extractedUsage, err := ExtractUsageFromSSE(requestLog.ID, captured.Bytes())
-		if err != nil {
-			log.Printf("stream usage extraction failed: %v", err)
-		} else {
-			usage = extractedUsage
-		}
+	}
+
+	responseBody := ""
+	if captured != nil {
+		responseBody = g.streamResponseBodyForStorage(captured.Bytes())
 	}
 
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
 		StatusCode:   resp.StatusCode,
-		ResponseBody: g.streamResponseBodyForStorage(captured.Bytes()),
+		ResponseBody: responseBody,
 		DurationMS:   elapsed.Milliseconds(),
 	}
-	g.saveExchange(requestLog, responseLog, usage)
+	g.saveExchange(requestLog, responseLog, usageExtractor.Usage())
 
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 		log.Printf("stream response drain failed: %v", err)
@@ -235,7 +246,7 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cache", "HIT")
 	w.WriteHeader(cached.StatusCode)
-	if _, err := w.Write([]byte(cached.ResponseBody)); err != nil {
+	if _, err := io.WriteString(w, cached.ResponseBody); err != nil {
 		log.Printf("write cached response failed: %v", err)
 	}
 

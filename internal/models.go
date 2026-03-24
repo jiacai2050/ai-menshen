@@ -1,4 +1,4 @@
-package gateway
+package aimenshen
 
 import "time"
 
@@ -45,10 +45,8 @@ type ModelUsageReport struct {
 }
 
 type RequestMeta struct {
-	OriginalBody   []byte
 	EffectiveBody  []byte
 	EffectiveModel string
 	CacheKey       string
 	Stream         bool
-	JSON           bool
 }
