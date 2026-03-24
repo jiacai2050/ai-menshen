@@ -2,7 +2,35 @@
 
 ai-menshen (门神) is a lightweight, local-first Go proxy for OpenAI-compatible APIs. It stands in front of upstream providers to keep auditing, caching, and API keys under your absolute control.
 
-> Pairs great with [OpenClaw](https://openclaw.ai/) 🦞.
+```mermaid
+graph TD
+    subgraph EXTERNAL [External World]
+        direction LR
+        Client([Clients / OpenClaw 🦞])
+        Upstream(["Upstream API<br>(OpenAI/DeepSeek...)"])
+    end
+
+    subgraph LOCAL [Your Local Environment]
+        direction TB
+        G[[ai-menshen]]
+
+        DB[(SQLite)]
+        CFG[config.toml]
+
+        G --- DB
+        G --- CFG
+    end
+
+    Client ==>|OpenAI API| G
+    G ==>|Auth Injection| Upstream
+
+    style EXTERNAL fill:none,stroke:#ccc,stroke-dasharray: 5 5
+    style LOCAL fill:#f0f7ff,stroke:#0066cc,stroke-width:2px
+    style G fill:#0066cc,color:#fff
+    style DB fill:#fff,stroke:#ddd
+    style CFG fill:#fff,stroke:#ddd
+```
+
 
 ## Core Features
 
@@ -11,6 +39,7 @@ ai-menshen (门神) is a lightweight, local-first Go proxy for OpenAI-compatible
 - **Auditing**: Log every request, response, and token usage to a local **SQLite** database.
 - **Smart Cache**: Instant replay for matching non-stream requests to save costs.
 - **Stream Support**: Full SSE support with real-time token usage extraction.
+  > **Tip**: For streaming, ensure your client sets `stream_options: {"include_usage": true}` to enable token usage reporting.
 - **Usage Reports**: Model-level token totals via `GET /__report/models`.
 
 ## How It Works
@@ -20,10 +49,10 @@ ai-menshen (门神) is a lightweight, local-first Go proxy for OpenAI-compatible
 flowchart TD
     A["1. Client Request In"] --> B["2. Transform (Auth & Model Inject)"]
     B --> C{"3. Decision: Cache Hit?"}
-    
+
     C -- "Yes (Fast)" --> D["4. Replay from SQLite"]
     C -- "No (Slow)" --> E["4. Forward to Upstream"]
-    
+
     D & E --> F["5. Audit (Usage & Latency)"]
     F --> G["6. Serve Response Out"]
 
@@ -34,54 +63,40 @@ flowchart TD
     style F fill:#d1e7dd,stroke:#198754,stroke-width:2px
 ```
 
-## Architecture
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e6f3ff'}}}%%
-flowchart LR
-    subgraph EXTERNAL [External World]
-        C["Clients (SDK / curl)"]
-        U["Upstream (OpenAI / DeepSeek)"]
-    end
-
-    subgraph LOCAL [Your Local Environment]
-        direction TB
-        G["ai-menshen (Go Binary)"]
-        CFG["config.toml"]
-        DB[("SQLite (Logs & Cache)")]
-        
-        G -.-> CFG
-        G -.-> DB
-    end
-
-    C <== "OpenAI API" ==> G
-    G <== "Auth Injection" ==> U
-
-    style EXTERNAL fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
-    style LOCAL fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
-    style G fill:#fff,stroke:#0066cc,stroke-width:2px
-```
-
 ## Quick Start
 
 ### 1. Configure & Run
 ```bash
 cp configs/example.toml config.toml
 # Edit config.toml with your api_key and base_url
-go run ./cmd/ai-menshen
+go run ./cmd/ai-menshen -config ./config.toml
 ```
 
 ### 2. Connect Your Client
 Point your OpenAI client to `http://localhost:8080`.
 
+#### Python (Non-stream)
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8080", api_key="local-placeholder")
 
 response = client.chat.completions.create(
-    model="any-model", # Will be overridden if a provider model is set in config.toml ([[providers]].model)
+    model="any-model", # Will be overridden if a provider model is set in config.toml
     messages=[{"role": "user", "content": "Hello!"}]
 )
+```
+
+#### Python (Stream)
+For token reporting, set `stream_options={"include_usage": True}`:
+```python
+stream = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hi!"}],
+    stream=True,
+    stream_options={"include_usage": True} # Critical for usage auditing
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")
 ```
 
 ### 3. Check Reports
@@ -107,7 +122,7 @@ Create a `config.toml` file to customize ai-menshen's behavior. You can find a c
 ```toml
 [[providers]]
 base_url = "https://gateway.ai.cloudflare.com/v1/ACCOUNT_ID/GATEWAY_NAME/openai"
-headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
+headers = { "cf-aig-authorization" = "Bearer ${CLOUDFLARE_API_KEY}" }
 ```
 
 ### `[storage]`
