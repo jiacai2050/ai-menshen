@@ -1,6 +1,6 @@
 # ai-menshen
 
-A small Go proxy service for OpenAI-compatible APIs with server-side auth injection, SQLite-backed request auditing, optional response reuse, and model-level token reports.
+ai-menshen is a lightweight, local-first Go proxy for OpenAI-compatible APIs, designed to keep auditing, caching, and usage reporting under your control.
 
 The name **menshen** (门神) comes from Chinese culture. A *menshen* is a "door guardian" or "gate guardian" figure placed at an entrance to protect what is behind it. That fits this project well: ai-menshen stands in front of an upstream AI provider, guards the real API key, and decides how requests should pass through.
 
@@ -19,47 +19,56 @@ The name **menshen** (门神) comes from Chinese culture. A *menshen* is a "door
 ## How It Works
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e6f3ff'}}}%%
 flowchart TD
-    A[Client request] --> B[ai-menshen]
-    B --> C[Load provider from TOML]
-    C --> D{Provider model override?}
-    D -->|Yes| E[Replace request model]
-    D -->|No| F[Keep client model]
-    E --> G[Normalize request and build cache key]
-    F --> G
-    G --> H{stream=true?}
-    H -->|No| I{Cache hit?}
-    I -->|Yes| J[Replay stored response]
-    I -->|No| K[Forward request upstream]
-    H -->|Yes| L[Forward stream upstream]
-    K --> M[Read JSON response]
-    L --> N[Proxy SSE chunks to client]
-    M --> O[Extract usage from JSON]
-    N --> P[Capture SSE stream]
-    P --> Q[Extract usage from SSE]
-    J --> R[Write audit rows to SQLite]
-    O --> R
-    Q --> R
-    R --> S[Serve response to client]
-    R --> T[Model usage report endpoint]
+    A["1. Client Request In"] --> B["2. Transform (Auth & Model Inject)"]
+    B --> C{"3. Decision: Cache Hit?"}
+    
+    C -- "Yes (Fast)" --> D["4. Replay from SQLite"]
+    C -- "No (Slow)" --> E["4. Forward to Upstream"]
+    
+    D & E --> F["5. Audit (Usage & Latency)"]
+    F --> G["6. Serve Response Out"]
+
+    %% Styling
+    style B fill:#cce5ff,stroke:#0066cc,stroke-width:2px
+    style C fill:#fff3cd,stroke:#ffc107,stroke-width:2px
+    style D fill:#e6ffe6,stroke:#009900,stroke-width:2px
+    style F fill:#d1e7dd,stroke:#198754,stroke-width:2px
 ```
 
-In short: ai-menshen can override the model, reuse safe non-stream responses from SQLite, forward misses to the upstream provider, and persist both normal and stream exchanges for later reporting.
+In short: ai-menshen acts as a smart gateway that injects credentials, optionally overrides models, reuses cached responses from SQLite, and logs every exchange for usage reporting.
 
 ## Architecture
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e6f3ff'}}}%%
 flowchart LR
-    C[Client / SDK / curl] --> G[ai-menshen]
-    G -->|forward request| U[Upstream provider]
-    U -->|JSON or SSE responses| G
-    G -->|read cached response| DB[(SQLite)]
-    G -->|write audit + usage| DB
-    DB -->|usage reports| R[Reports]
-    G --> C
+    subgraph EXTERNAL [External World]
+        C["Clients (SDK / curl)"]
+        U["Upstream (OpenAI / DeepSeek)"]
+    end
+
+    subgraph LOCAL [Your Local Environment]
+        direction TB
+        G["ai-menshen (Go Binary)"]
+        CFG["config.toml"]
+        DB[("SQLite (Logs & Cache)")]
+        
+        G -.-> CFG
+        G -.-> DB
+    end
+
+    C <== "OpenAI API" ==> G
+    G <== "Auth Injection" ==> U
+
+    %% Styling
+    style EXTERNAL fill:#f9f9f9,stroke:#ccc,stroke-dasharray: 5 5
+    style LOCAL fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style G fill:#fff,stroke:#0066cc,stroke-width:2px
 ```
 
-This is the high-level picture: ai-menshen sits between clients and the upstream provider, can read cached responses from SQLite, writes audit and usage data back to SQLite, and exposes reports derived from the same database.
+This structural view highlights `ai-menshen` as the secure local bridge, keeping all sensitive data (API keys, audit logs, and cache) strictly within **Your Local Environment**.
 
 ## Configuration
 
