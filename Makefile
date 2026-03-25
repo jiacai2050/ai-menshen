@@ -26,4 +26,4 @@ vet:
 
 check: fmt-check vet test
 
-.PHONY: build test fmt-check vet check
+.PHONY: build test fmt fmt-check vet check
