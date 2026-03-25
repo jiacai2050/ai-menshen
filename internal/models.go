@@ -63,7 +63,7 @@ type ModelUsageReport struct {
 
 type LogEntry struct {
 	ID                  string `json:"id"`
-	CreatedAt           string `json:"created_at"`
+	CreatedAt           int64  `json:"created_at"`
 	Model               string `json:"model"`
 	Path                string `json:"path"`
 	StatusCode          int    `json:"status_code"`

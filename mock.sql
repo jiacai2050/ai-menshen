@@ -1,18 +1,19 @@
--- ai-menshen Mock Data Generator (Payload Edition)
--- This script generates 3000 records with realistic JSON payloads.
+-- ai-menshen Mock Data Generator (Robust Time Edition)
+-- This script generates 3000 records using a simpler timestamp calculation.
 
 DELETE FROM usage_logs;
 DELETE FROM response_logs;
 DELETE FROM request_logs;
 
--- 1. Generate request logs with realistic JSON
+-- 1. Generate request logs
+-- (unixepoch('now') - days_offset) * 1000
 INSERT INTO request_logs (id, created_at, path, model, cache_key, request_body)
 WITH RECURSIVE cnt(x) AS (
     SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 3000
 )
 SELECT 
     'mock-req-' || x || '-' || lower(hex(randomblob(4))),
-    strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || (x % 30) || ' days', '-' || (abs(random()) % 86400) || ' seconds'),
+    (unixepoch('now') - (x % 30) * 86400 - (abs(random()) % 86400)) * 1000,
     '/chat/completions',
     CASE (x % 3)
         WHEN 0 THEN 'gpt-4o'
@@ -27,7 +28,7 @@ SELECT
     END
 FROM cnt;
 
--- 2. Generate response logs with realistic JSON
+-- 2. Generate response logs
 INSERT INTO response_logs (request_id, status_code, duration_ms, from_cache, response_body)
 SELECT 
     id,
@@ -52,7 +53,6 @@ SELECT
 FROM response_logs rs
 JOIN request_logs rl ON rl.id = rs.request_id;
 
--- 4. Finalize
 UPDATE usage_logs SET total_tokens = prompt_tokens + completion_tokens;
 
-SELECT 'Successfully generated 3000 mock records with payloads!' as status;
+SELECT 'Successfully generated 3000 mock records with robust timestamps!' as status;

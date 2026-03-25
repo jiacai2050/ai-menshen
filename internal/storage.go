@@ -74,7 +74,7 @@ func (s *Storage) init() error {
 		`PRAGMA busy_timeout = 5000;`,
 		`CREATE TABLE IF NOT EXISTS request_logs (
 			id TEXT PRIMARY KEY,
-			created_at TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
 			path TEXT NOT NULL,
 			model TEXT,
 			cache_key TEXT,
@@ -131,7 +131,7 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 	if _, err := tx.Exec(
 		`INSERT INTO request_logs (id, created_at, path, model, cache_key, request_body) VALUES (?, ?, ?, ?, ?, ?)`,
 		request.ID,
-		request.CreatedAt.UTC().Format(time.RFC3339Nano),
+		request.CreatedAt.UnixMilli(),
 		request.Path,
 		nullIfEmpty(request.Model),
 		nullIfEmpty(request.CacheKey),
@@ -218,7 +218,7 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
-		WHERE rl.created_at >= DATETIME('now', ?)
+		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 		ORDER BY rl.created_at DESC
 		LIMIT ?
 	`, fmt.Sprintf("-%d days", days), limit)
@@ -280,7 +280,7 @@ func (s *Storage) UsageSummary(days int) (*UsageSummary, error) {
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
-		WHERE rl.created_at >= DATETIME('now', ?)
+		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 	`, fmt.Sprintf("-%d days", days)).Scan(
 		&summary.TotalRequests,
 		&summary.CacheHits,
@@ -298,14 +298,14 @@ func (s *Storage) UsageSummary(days int) (*UsageSummary, error) {
 func (s *Storage) DailyUsage(days int) ([]DailyUsage, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			DATE(rl.created_at) AS date,
+			DATE(rl.created_at / 1000, 'unixepoch') AS date,
 			SUM(COALESCE(ul.total_tokens, 0)) AS total_tokens,
 			SUM(COALESCE(ul.prompt_tokens, 0)) AS prompt_tokens,
 			SUM(COALESCE(ul.completion_tokens, 0)) AS completion_tokens,
 			COUNT(*) AS request_count
 		FROM request_logs rl
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
-		WHERE rl.created_at >= DATETIME('now', ?)
+		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 		GROUP BY date
 		ORDER BY date ASC
 	`, fmt.Sprintf("-%d days", days))
@@ -338,7 +338,7 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
-		WHERE rl.created_at >= DATETIME('now', ?)
+		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 		GROUP BY rl.model
 		ORDER BY total_tokens DESC, request_count DESC
 	`, fmt.Sprintf("-%d days", days))

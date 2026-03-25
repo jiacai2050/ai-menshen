@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,7 +321,7 @@ func (g *Gateway) handleDailyReport(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) handleLogsReport(w http.ResponseWriter, r *http.Request) {
 	days := g.getDays(r)
-	logs, err := g.storage.RequestLogs(days, 100)
+	logs, err := g.storage.RequestLogs(days, 1000)
 	if err != nil {
 		log.Printf("logs report error: %v", err)
 		http.Error(w, "failed to query logs report", http.StatusInternalServerError)

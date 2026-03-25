@@ -33,6 +33,19 @@ graph TD
     style CFG fill:#fff,stroke:#ddd
 ```
 
+## Built-in Dashboard
+
+ai-menshen comes with a beautiful, lightweight dashboard accessible at `http://localhost:8080/` by default.
+
+### Key Features
+- **Overview & Trends**: At-a-glance cards for total requests, cache hit rate, and token usage. A stacked bar chart visualizes prompt vs. completion consumption.
+- **Global Time Filtering**: Toggle between 7, 14, 30, or 90 days to see how your usage evolves.
+- **Audit Logs**: A full history of your API requests with:
+  - **Auto-truncate Preview**: See the start of requests and responses directly in the list.
+  - **Deep Inspection**: Click any row to view formatted JSON for both request and response bodies.
+  - **Status Highlighting**: Easily spot failed requests (4xx/5xx).
+- **Privacy First**: Zero external CDN calls. All JS/CSS is embedded, making it perfect for offline or private environments.
+
 ## Showcase
 
 | Overview & Trends | Audit Logs |
