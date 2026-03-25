@@ -179,7 +179,10 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sqlite transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *Storage) FindCachedResponse(cacheKey string, maxBodyBytes int64) (*CachedResponse, error) {
