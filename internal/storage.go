@@ -207,7 +207,125 @@ func (s *Storage) FindCachedResponse(cacheKey string, maxBodyBytes int64) (*Cach
 	return &cached, nil
 }
 
-func (s *Storage) ModelUsageReports() ([]ModelUsageReport, error) {
+func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT 
+			rl.id, rl.created_at, rl.model, rl.path, 
+			rs.status_code, rs.duration_ms, 
+			COALESCE(ul.total_tokens, 0),
+			COALESCE(SUBSTR(rl.request_body, 1, 200), ''),
+			COALESCE(SUBSTR(rs.response_body, 1, 200), '')
+		FROM request_logs rl
+		JOIN response_logs rs ON rs.request_id = rl.id
+		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		WHERE rl.created_at >= DATETIME('now', ?)
+		ORDER BY rl.created_at DESC
+		LIMIT ?
+	`, fmt.Sprintf("-%d days", days), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query request logs: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []LogEntry
+	for rows.Next() {
+		var l LogEntry
+		if err := rows.Scan(
+			&l.ID, &l.CreatedAt, &l.Model, &l.Path, 
+			&l.StatusCode, &l.DurationMS, &l.TotalTokens,
+			&l.RequestBodyPreview, &l.ResponseBodyPreview,
+		); err != nil {
+			return nil, fmt.Errorf("scan log entry: %w", err)
+		}
+		logs = append(logs, l)
+	}
+	return logs, nil
+}
+
+func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
+	var d LogDetail
+	err := s.db.QueryRow(`
+		SELECT 
+			rl.id, rl.created_at, rl.model, rl.path, 
+			rs.status_code, rs.duration_ms, 
+			COALESCE(rs.response_body, ''),
+			COALESCE(rl.request_body, ''),
+			COALESCE(ul.total_tokens, 0)
+		FROM request_logs rl
+		JOIN response_logs rs ON rs.request_id = rl.id
+		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		WHERE rl.id = ?
+	`, id).Scan(
+		&d.ID, &d.CreatedAt, &d.Model, &d.Path, 
+		&d.StatusCode, &d.DurationMS, &d.ResponseBody,
+		&d.RequestBody,
+		&d.TotalTokens,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query request detail: %w", err)
+	}
+	return &d, nil
+}
+
+func (s *Storage) UsageSummary(days int) (*UsageSummary, error) {
+	var summary UsageSummary
+	err := s.db.QueryRow(`
+		SELECT
+			COUNT(*) AS total_requests,
+			SUM(CASE WHEN rs.from_cache = 1 THEN 1 ELSE 0 END) AS cache_hits,
+			SUM(COALESCE(ul.total_tokens, 0)) AS total_tokens,
+			SUM(COALESCE(ul.prompt_tokens, 0)) AS prompt_tokens,
+			SUM(COALESCE(ul.completion_tokens, 0)) AS completion_tokens,
+			SUM(COALESCE(ul.cached_tokens, 0)) AS cached_tokens
+		FROM request_logs rl
+		JOIN response_logs rs ON rs.request_id = rl.id
+		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		WHERE rl.created_at >= DATETIME('now', ?)
+	`, fmt.Sprintf("-%d days", days)).Scan(
+		&summary.TotalRequests,
+		&summary.CacheHits,
+		&summary.TotalTokens,
+		&summary.PromptTokens,
+		&summary.CompletionTokens,
+		&summary.CachedTokens,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query usage summary: %w", err)
+	}
+	return &summary, nil
+}
+
+func (s *Storage) DailyUsage(days int) ([]DailyUsage, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			DATE(rl.created_at) AS date,
+			SUM(COALESCE(ul.total_tokens, 0)) AS total_tokens,
+			SUM(COALESCE(ul.prompt_tokens, 0)) AS prompt_tokens,
+			SUM(COALESCE(ul.completion_tokens, 0)) AS completion_tokens,
+			COUNT(*) AS request_count
+		FROM request_logs rl
+		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		WHERE rl.created_at >= DATETIME('now', ?)
+		GROUP BY date
+		ORDER BY date ASC
+	`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return nil, fmt.Errorf("query daily usage: %w", err)
+	}
+	defer rows.Close()
+
+	var results []DailyUsage
+	for rows.Next() {
+		var d DailyUsage
+		if err := rows.Scan(&d.Date, &d.TotalTokens, &d.PromptTokens, &d.CompletionTokens, &d.RequestCount); err != nil {
+			return nil, fmt.Errorf("scan daily usage: %w", err)
+		}
+		results = append(results, d)
+	}
+	return results, nil
+}
+
+func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			COALESCE(NULLIF(rl.model, ''), '(unknown)') AS model,
@@ -220,9 +338,10 @@ func (s *Storage) ModelUsageReports() ([]ModelUsageReport, error) {
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		WHERE rl.created_at >= DATETIME('now', ?)
 		GROUP BY rl.model
 		ORDER BY total_tokens DESC, request_count DESC
-	`)
+	`, fmt.Sprintf("-%d days", days))
 	if err != nil {
 		return nil, fmt.Errorf("query model usage report: %w", err)
 	}

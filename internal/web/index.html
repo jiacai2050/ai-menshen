@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ai-menshen Dashboard</title>
+    <link rel="stylesheet" href="/assets/pico.min.css">
+    <script defer src="/assets/alpine.min.js"></script>
+    <script src="/assets/chart.min.js"></script>
+    <style>
+        :root { --pico-font-size: 0.85rem; }
+        .grid-stats { margin-bottom: 2rem; }
+        .card { padding: 1.2rem; text-align: center; border: 1px solid #eee; border-radius: 8px; background: #fff; }
+        .card h5 { margin-bottom: 0.5rem; color: #666; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .card .value { font-size: 1.4rem; font-weight: bold; color: var(--pico-primary); }
+        section h5 { margin-top: 1.5rem; border-left: 4px solid var(--pico-primary); padding-left: 0.5rem; }
+        canvas { max-height: 300px; width: 100% !important; }
+        .header-controls { display: flex; justify-content: flex-end; margin-bottom: 1rem; align-items: center; gap: 0.5rem; }
+        .header-controls select { width: auto; margin: 0; padding: 0.2rem 2.2rem 0.2rem 0.5rem; font-size: 0.8rem; height: auto; }
+        .header-controls label { margin: 0; font-size: 0.8rem; color: #666; }
+        
+        /* Logs Styling */
+        .log-row { cursor: pointer; }
+        .log-row:hover { background-color: #f8f9fa; }
+        .status-ok { color: #198754; font-weight: bold; }
+        .status-error { color: #dc3545; font-weight: bold; }
+        .json-box { background: #f4f4f4; padding: 1rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.75rem; max-height: 400px; white-space: pre-wrap; }
+        .text-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; }
+        
+        /* Nav Tabs */
+        nav.tabs ul { border-bottom: 1px solid #eee; width: 100%; margin-bottom: 2rem; }
+        nav.tabs li { padding: 0.5rem 1.5rem; cursor: pointer; border-bottom: 2px solid transparent; }
+        nav.tabs li.active { border-bottom: 2px solid var(--pico-primary); font-weight: bold; color: var(--pico-primary); }
+    </style>
+</head>
+<body x-data="dashboard()" @keyup.escape.window="selectedLog = null">
+    <nav class="container">
+        <ul><li><strong>门神 ai-menshen</strong></li></ul>
+        <ul>
+            <li><a href="https://github.com/jiacai2050/ai-menshen" target="_blank" class="secondary">GitHub</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <!-- Tab Navigation -->
+        <nav class="tabs">
+            <ul>
+                <li :class="tab === 'overview' ? 'active' : ''" @click="tab = 'overview'">Overview</li>
+                <li :class="tab === 'logs' ? 'active' : ''" @click="tab = 'logs'; fetchLogs()">Audit Logs</li>
+            </ul>
+        </nav>
+
+        <!-- Global Controls -->
+        <div class="header-controls">
+            <label>Period:</label>
+            <select x-model="days" @change="tab === 'overview' ? fetchOverview() : fetchLogs()">
+                <option value="7">Last 7 Days</option>
+                <option value="14">Last 14 Days</option>
+                <option value="30">Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+            </select>
+        </div>
+
+        <!-- Overview Tab -->
+        <div x-show="tab === 'overview'">
+            <div class="grid grid-stats">
+                <div class="card"><h5>Total Requests</h5><div class="value" x-text="summary.total_requests || 0"></div></div>
+                <div class="card"><h5>Cache Hit Rate</h5><div class="value" x-text="hitRate()"></div></div>
+                <div class="card"><h5>Total Tokens</h5><div class="value" x-text="formatNumber(summary.total_tokens)"></div></div>
+                <div class="card"><h5>Cached Tokens</h5><div class="value" x-text="formatNumber(summary.cached_tokens)"></div></div>
+            </div>
+
+            <section>
+                <h5>Usage Trend</h5>
+                <div style="background: #fff; padding: 1rem; border-radius: 8px; border: 1px solid #eee;">
+                    <canvas id="usageChart"></canvas>
+                </div>
+            </section>
+
+            <section>
+                <h5>Model Breakdown</h5>
+                <figure>
+                    <table role="grid">
+                        <thead>
+                            <tr><th>Model</th><th>Requests</th><th>Cache Hits</th><th>Total Tokens</th><th>Cached Tokens</th></tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="m in models">
+                                <tr>
+                                    <td x-text="m.model"></td>
+                                    <td x-text="m.request_count"></td>
+                                    <td x-text="m.cache_hits"></td>
+                                    <td x-text="formatNumber(m.total_tokens)"></td>
+                                    <td x-text="formatNumber(m.cached_tokens)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </figure>
+            </section>
+        </div>
+
+        <!-- Logs Tab -->
+        <div x-show="tab === 'logs'" x-cloak>
+            <figure>
+                <table role="grid">
+                    <thead>
+                        <tr>
+                            <th style="width: 15%">Time</th>
+                            <th style="width: 15%">Model</th>
+                            <th style="width: 8%">Status</th>
+                            <th>Preview (Req/Res)</th>
+                            <th style="width: 10%">Tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="log in logs">
+                            <tr class="log-row" @click="showDetail(log.id)">
+                                <td x-text="formatDate(log.created_at)"></td>
+                                <td x-text="log.model || '-'"></td>
+                                <td :class="log.status_code < 400 ? 'status-ok' : 'status-error'" x-text="log.status_code"></td>
+                                <td style="max-width: 0; width: 50%;">
+                                    <small class="secondary text-truncate" :title="log.request_preview" x-text="log.request_preview"></small>
+                                    <small class="text-truncate" :title="log.response_preview" x-text="log.response_preview"></small>
+                                </td>
+                                <td x-text="formatNumber(log.total_tokens)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </figure>
+        </div>
+
+        <!-- Detail Modal -->
+        <dialog id="log-modal" :open="!!selectedLog" @click.self="selectedLog = null">
+            <article style="max-width: 900px; width: 90%;">
+                <header>
+                    <a href="#close" aria-label="Close" class="close" @click="selectedLog = null"></a>
+                    <strong>Request Details: <small x-text="selectedLog?.id"></small></strong>
+                </header>
+                <div class="grid">
+                    <div>
+                        <strong>Time:</strong> <span x-text="formatDate(selectedLog?.created_at)"></span><br>
+                        <strong>Model:</strong> <span x-text="selectedLog?.model"></span>
+                    </div>
+                    <div>
+                        <strong>Status:</strong> <span x-text="selectedLog?.status_code"></span><br>
+                        <strong>Latency:</strong> <span x-text="selectedLog?.duration_ms + 'ms'"></span>
+                    </div>
+                </div>
+                
+                <h5>Request Body</h5>
+                <pre class="json-box" x-text="formatJSON(selectedLog?.request_body)"></pre>
+                
+                <h5>Response Body</h5>
+                <pre class="json-box" x-text="formatJSON(selectedLog?.response_body)"></pre>
+                
+                <footer>
+                    <button class="secondary" @click="selectedLog = null">Close</button>
+                </footer>
+            </article>
+        </dialog>
+    </main>
+
+    <footer class="container" style="margin-top: 4rem; padding: 2rem 0; border-top: 1px solid #eee;">
+        <div class="grid">
+            <div>
+                <small><strong>ai-menshen</strong></small><br>
+                <small class="secondary">The local-first AI door guardian.</small>
+            </div>
+            <div style="text-align: right;">
+                <small class="secondary">
+                    &copy; 2026. Built with Go & ❤️. 
+                    <a href="https://github.com/jiacai2050/ai-menshen" target="_blank" style="margin-left: 0.5rem;">GitHub</a>
+                </small><br>
+                <small style="color: #198754;">● Connected & Secure</small>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        function dashboard() {
+            return {
+                tab: 'overview',
+                summary: {},
+                models: [],
+                daily: [],
+                logs: [],
+                selectedLog: null,
+                days: 14,
+                chart: null,
+                init() {
+                    this.fetchOverview();
+                },
+                fetchOverview() {
+                    const params = '?days=' + this.days;
+                    fetch('/__report/summary' + params).then(res => res.json()).then(data => this.summary = data);
+                    fetch('/__report/models' + params).then(res => res.json()).then(data => this.models = data);
+                    fetch('/__report/daily' + params).then(res => res.json()).then(data => {
+                        this.daily = data;
+                        this.renderChart();
+                    });
+                },
+                fetchLogs() {
+                    fetch('/__report/logs?days=' + this.days).then(res => res.json()).then(data => this.logs = data);
+                },
+                showDetail(id) {
+                    fetch('/__report/log?id=' + id).then(res => res.json()).then(data => {
+                        this.selectedLog = data;
+                    });
+                },
+                renderChart() {
+                    if (!this.daily || this.daily.length === 0) return;
+                    const ctx = document.getElementById('usageChart').getContext('2d');
+                    if (this.chart) this.chart.destroy();
+                    this.chart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: this.daily.map(d => d.date),
+                            datasets: [{
+                                label: 'Prompt Tokens',
+                                data: this.daily.map(d => d.prompt_tokens),
+                                backgroundColor: '#cce5ff',
+                                borderColor: '#0066cc',
+                                borderWidth: 1
+                            }, {
+                                label: 'Completion Tokens',
+                                data: this.daily.map(d => d.completion_tokens),
+                                backgroundColor: '#d1e7dd',
+                                borderColor: '#198754',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: { stacked: true, grid: { display: false } },
+                                y: { stacked: true, beginAtZero: true }
+                            },
+                            plugins: {
+                                legend: { position: 'bottom' }
+                            }
+                        }
+                    });
+                },
+                hitRate() {
+                    if (!this.summary.total_requests) return '0%';
+                    return ((this.summary.cache_hits / this.summary.total_requests) * 100).toFixed(1) + '%';
+                },
+                formatNumber(n) {
+                    if (!n) return '0';
+                    return n.toLocaleString();
+                },
+                formatDate(s) {
+                    if (!s) return '-';
+                    return new Date(s).toLocaleString();
+                },
+                formatJSON(s) {
+                    if (!s) return '-';
+                    try {
+                        return JSON.stringify(JSON.parse(s), null, 2);
+                    } catch(e) {
+                        return s;
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>

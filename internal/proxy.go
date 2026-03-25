@@ -12,11 +12,17 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"ai-menshen/internal/web"
 )
 
 const (
-	authHeaderName   = "Authorization"
-	reportModelsPath = "/__report/models"
+	authHeaderName    = "Authorization"
+	reportModelsPath  = "/__report/models"
+	reportSummaryPath = "/__report/summary"
+	reportDailyPath   = "/__report/daily"
+	reportLogsPath    = "/__report/logs"
+	reportLogDetailPath = "/__report/log"
 )
 
 type Gateway struct {
@@ -38,9 +44,30 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet && r.URL.Path == reportModelsPath {
-		g.handleModelReport(w)
-		return
+	if r.Method == http.MethodGet {
+		switch r.URL.Path {
+		case "/":
+			g.handleDashboard(w)
+			return
+		case "/assets/pico.min.css", "/assets/alpine.min.js", "/assets/chart.min.js":
+			g.handleAssets(w, r)
+			return
+		case reportModelsPath:
+			g.handleModelReport(w, r)
+			return
+		case reportSummaryPath:
+			g.handleSummaryReport(w, r)
+			return
+		case reportDailyPath:
+			g.handleDailyReport(w, r)
+			return
+		case reportLogsPath:
+			g.handleLogsReport(w, r)
+			return
+		case reportLogDetailPath:
+			g.handleLogDetailReport(w, r)
+			return
+		}
 	}
 
 	startedAt := time.Now()
@@ -252,17 +279,113 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 	log.Printf("[%d] %s %s (%.3fs, cache hit)", cached.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
-func (g *Gateway) handleModelReport(w http.ResponseWriter) {
-	reports, err := g.storage.ModelUsageReports()
+func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
+	days := g.getDays(r)
+	reports, err := g.storage.ModelUsageReports(days)
 	if err != nil {
+		log.Printf("model report error: %v", err)
 		http.Error(w, "failed to query model report", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(reports); err != nil {
-		log.Printf("write model report failed: %v", err)
+	_ = json.NewEncoder(w).Encode(reports)
+}
+
+func (g *Gateway) handleSummaryReport(w http.ResponseWriter, r *http.Request) {
+	days := g.getDays(r)
+	summary, err := g.storage.UsageSummary(days)
+	if err != nil {
+		log.Printf("summary report error: %v", err)
+		http.Error(w, "failed to query summary report", http.StatusInternalServerError)
+		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(summary)
+}
+
+func (g *Gateway) handleDailyReport(w http.ResponseWriter, r *http.Request) {
+	days := g.getDays(r)
+	daily, err := g.storage.DailyUsage(days)
+	if err != nil {
+		log.Printf("daily report error: %v", err)
+		http.Error(w, "failed to query daily report", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(daily)
+}
+
+func (g *Gateway) handleLogsReport(w http.ResponseWriter, r *http.Request) {
+	days := g.getDays(r)
+	logs, err := g.storage.RequestLogs(days, 100)
+	if err != nil {
+		log.Printf("logs report error: %v", err)
+		http.Error(w, "failed to query logs report", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(logs)
+}
+
+func (g *Gateway) handleLogDetailReport(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing request id", http.StatusBadRequest)
+		return
+	}
+
+	detail, err := g.storage.RequestDetail(id)
+	if err != nil {
+		log.Printf("log detail error: %v", err)
+		http.Error(w, "failed to query log detail", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(detail)
+}
+
+func (g *Gateway) getDays(r *http.Request) int {
+	daysStr := r.URL.Query().Get("days")
+	days := 14 // default
+	if daysStr != "" {
+		if d, err := fmt.Sscanf(daysStr, "%d", &days); err == nil && d > 0 {
+			// days is set from Sscanf
+		}
+	}
+	return days
+}
+
+
+func (g *Gateway) handleDashboard(w http.ResponseWriter) {
+	content, err := web.Assets.ReadFile("index.html")
+	if err != nil {
+		http.Error(w, "dashboard template not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	_, _ = w.Write(content)
+}
+
+func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	content, err := web.Assets.ReadFile(path)
+	if err != nil {
+		http.Error(w, "asset not found", http.StatusNotFound)
+		return
+	}
+
+	switch {
+	case strings.HasSuffix(path, ".css"):
+		w.Header().Set("Content-Type", "text/css")
+	case strings.HasSuffix(path, ".js"):
+		w.Header().Set("Content-Type", "application/javascript")
+	}
+	_, _ = w.Write(content)
 }
 
 func (g *Gateway) forwardUpstream(r *http.Request, body []byte) (*http.Response, time.Duration, error) {

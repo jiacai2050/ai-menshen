@@ -2,6 +2,12 @@
 
 ai-menshen (门神) is a local-first proxy for OpenAI-compatible APIs. It sits in front of your upstream providers to handle **Auth Injection (BYOK)**, **Model Overriding**, **Usage Auditing**, and **Caching**—keeping your API keys and logs strictly under your control.
 
+## Showcase
+
+| Overview & Trends | Audit Logs |
+| :---: | :---: |
+| ![Overview](docs/screenshot-overview.webp) | ![Logs](docs/screenshot-logs.webp) |
+
 > *Standalone Go binary. No external dependencies except SQLite.*
 
 ```mermaid
