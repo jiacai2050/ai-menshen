@@ -71,7 +71,6 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 
 func decodeJSONObject(body []byte) (map[string]any, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
 
 	var payload any
 	if err := decoder.Decode(&payload); err != nil {

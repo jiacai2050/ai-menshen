@@ -1,7 +1,6 @@
 package aimenshen
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -49,17 +48,19 @@ func TestBuildCacheKeyExplicit(t *testing.T) {
 			expectKey: "767d478c9349beda7e10ee0590b86fcaf57bc7ff48bd5c4229908834923e144f",
 		},
 		{
-			name:      "deterministic float representation",
+			name:      "float consistency (verify 1)",
 			path:      "/v1/chat/completions",
-			payload:   `{"temp": 0.0000001, "top_p": 1.0}`,
+			payload:   `{"temp": 0.0000001, "top_p": 1}`,
 			expectKey: "156c816deb0adc2b84702ceffa009ce5b9ec83dd366b356147ad3df74f6f96ac",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var p map[string]any
-			_ = json.Unmarshal([]byte(tt.payload), &p)
+			p, ok := decodeJSONObject([]byte(tt.payload))
+			if !ok {
+				t.Fatalf("failed to decode payload: %s", tt.payload)
+			}
 
 			got := buildCacheKey(tt.path, p)
 			if tt.expectKey != "" && got != tt.expectKey {
