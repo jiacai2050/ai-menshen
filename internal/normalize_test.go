@@ -62,7 +62,10 @@ func TestBuildCacheKeyExplicit(t *testing.T) {
 				t.Fatalf("failed to decode payload: %s", tt.payload)
 			}
 
-			got := buildCacheKey(tt.path, p)
+			got, err := buildCacheKey(tt.path, p)
+			if err != nil {
+				t.Fatalf("buildCacheKey() error = %v", err)
+			}
 			if tt.expectKey != "" && got != tt.expectKey {
 				t.Errorf("buildCacheKey() got = %s, want %s", got, tt.expectKey)
 			}

@@ -81,8 +81,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := AnalyzeRequest(r.URL.Path, requestBody, g.provider)
 	if err != nil {
-		http.Error(w, "failed to analyze request", http.StatusBadRequest)
-		return
+		log.Printf("failed to analyze request: %v", err)
+		// Fallback to original body and default meta
+		meta = RequestMeta{
+			EffectiveBody: requestBody,
+		}
 	}
 
 	if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
@@ -204,6 +207,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 			}
 			if err := usageExtractor.Write(chunk); err != nil {
 				log.Printf("stream usage extraction failed: %v", err)
+				// Do not break, keep proxying the stream
 			}
 			if captured != nil {
 				// Don't capture more than 1MB to avoid memory blow-up
