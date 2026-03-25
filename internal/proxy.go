@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	authHeaderName    = "Authorization"
-	reportModelsPath  = "/__report/models"
-	reportSummaryPath = "/__report/summary"
-	reportDailyPath   = "/__report/daily"
-	reportLogsPath    = "/__report/logs"
+	authHeaderName      = "Authorization"
+	reportModelsPath    = "/__report/models"
+	reportSummaryPath   = "/__report/summary"
+	reportDailyPath     = "/__report/daily"
+	reportLogsPath      = "/__report/logs"
 	reportLogDetailPath = "/__report/log"
 )
 
@@ -359,7 +359,6 @@ func (g *Gateway) getDays(r *http.Request) int {
 	}
 	return days
 }
-
 
 func (g *Gateway) handleDashboard(w http.ResponseWriter) {
 	content, err := web.Assets.ReadFile("index.html")

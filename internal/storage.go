@@ -231,7 +231,7 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 	for rows.Next() {
 		var l LogEntry
 		if err := rows.Scan(
-			&l.ID, &l.CreatedAt, &l.Model, &l.Path, 
+			&l.ID, &l.CreatedAt, &l.Model, &l.Path,
 			&l.StatusCode, &l.DurationMS, &l.TotalTokens,
 			&l.RequestBodyPreview, &l.ResponseBodyPreview,
 		); err != nil {
@@ -256,7 +256,7 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
 		WHERE rl.id = ?
 	`, id).Scan(
-		&d.ID, &d.CreatedAt, &d.Model, &d.Path, 
+		&d.ID, &d.CreatedAt, &d.Model, &d.Path,
 		&d.StatusCode, &d.DurationMS, &d.ResponseBody,
 		&d.RequestBody,
 		&d.TotalTokens,
