@@ -3,10 +3,8 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
+    branches:
+      - main
   pull_request:
     paths:
       - "**.go"
@@ -26,26 +24,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Verify formatting
-        shell: bash
-        run: |
-          mapfile -t files < <(git ls-files '*.go')
-          if [ "${#files[@]}" -eq 0 ]; then
-            exit 0
-          fi
-
-          mapfile -t unformatted < <(gofmt -l "${files[@]}")
-          if [ "${#unformatted[@]}" -gt 0 ]; then
-            echo "The following files need gofmt:"
-            printf '  - %s\n' "${unformatted[@]}"
-            exit 1
-          fi
-
-      - name: Build packages
-        run: go build ./...
-
-      - name: Run go vet
-        run: go vet ./...
+      - name: Run checks
+        run: make check
 
       - name: Build binary
         run: make build

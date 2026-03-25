@@ -6,7 +6,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"io"
 	"sort"
+	"strconv"
+	"sync"
+)
+
+var (
+	bufferPool = sync.Pool{
+		New: func() any { return new(bytes.Buffer) },
+	}
+	sha256Pool = sync.Pool{
+		New: func() any { return sha256.New() },
+	}
 )
 
 func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestMeta, error) {
@@ -62,7 +75,6 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 
 func decodeJSONObject(body []byte) (map[string]any, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
 
 	var payload any
 	if err := decoder.Decode(&payload); err != nil {
@@ -74,40 +86,117 @@ func decodeJSONObject(body []byte) (map[string]any, bool) {
 }
 
 func buildCacheKey(path string, payload map[string]any) (string, error) {
-	normalized := map[string]any{
-		"path":    path,
-		"request": normalizeForCache(payload),
-	}
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufferPool.Put(buf)
 
-	encoded, err := marshalCanonical(normalized)
-	if err != nil {
+	if _, err := buf.WriteString(`{"path":`); err != nil {
+		return "", err
+	}
+	if err := encodeString(buf, path); err != nil {
+		return "", err
+	}
+	if _, err := buf.WriteString(`,"request":`); err != nil {
+		return "", err
+	}
+	if err := writeCanonicalJSON(buf, payload, true); err != nil {
+		return "", err
+	}
+	if err := buf.WriteByte('}'); err != nil {
 		return "", err
 	}
 
-	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:]), nil
+	h := sha256Pool.Get().(hash.Hash)
+	h.Reset()
+	defer sha256Pool.Put(h)
+
+	h.Write(buf.Bytes())
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func normalizeForCache(value any) any {
+func writeCanonicalJSON(w io.Writer, value any, isRootRequest bool) error {
 	switch typed := value.(type) {
+	case nil:
+		_, err := io.WriteString(w, "null")
+		return err
+	case bool:
+		var s string
+		if typed {
+			s = "true"
+		} else {
+			s = "false"
+		}
+		_, err := io.WriteString(w, s)
+		return err
+	case string:
+		return encodeString(w, typed)
+	case float64:
+		_, err := io.WriteString(w, strconv.FormatFloat(typed, 'f', -1, 64))
+		return err
 	case map[string]any:
-		normalized := make(map[string]any, len(typed))
-		for key, item := range typed {
-			if shouldExcludeCacheField(key, item) {
+		keys := make([]string, 0, len(typed))
+		for k := range typed {
+			if isRootRequest && shouldExcludeCacheField(k, typed[k]) {
 				continue
 			}
-			normalized[key] = normalizeForCache(item)
+			keys = append(keys, k)
 		}
-		return normalized
+		sort.Strings(keys)
+
+		if _, err := io.WriteString(w, "{"); err != nil {
+			return err
+		}
+		for i, k := range keys {
+			if i > 0 {
+				if _, err := io.WriteString(w, ","); err != nil {
+					return err
+				}
+			}
+			if err := encodeString(w, k); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(w, ":"); err != nil {
+				return err
+			}
+			if err := writeCanonicalJSON(w, typed[k], false); err != nil {
+				return err
+			}
+		}
+		_, err := io.WriteString(w, "}")
+		return err
 	case []any:
-		items := make([]any, len(typed))
-		for i, item := range typed {
-			items[i] = normalizeForCache(item)
+		if _, err := io.WriteString(w, "["); err != nil {
+			return err
 		}
-		return items
+		for i, v := range typed {
+			if i > 0 {
+				if _, err := io.WriteString(w, ","); err != nil {
+					return err
+				}
+			}
+			if err := writeCanonicalJSON(w, v, false); err != nil {
+				return err
+			}
+		}
+		_, err := io.WriteString(w, "]")
+		return err
 	default:
-		return typed
+		b, err := json.Marshal(typed)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(b)
+		return err
 	}
+}
+
+func encodeString(w io.Writer, s string) error {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
 }
 
 func shouldExcludeCacheField(key string, value any) bool {
@@ -120,81 +209,4 @@ func shouldExcludeCacheField(key string, value any) bool {
 	default:
 		return false
 	}
-}
-
-func marshalCanonical(value any) ([]byte, error) {
-	var buffer bytes.Buffer
-	if err := writeCanonicalJSON(&buffer, value); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
-}
-
-func writeCanonicalJSON(buffer *bytes.Buffer, value any) error {
-	switch typed := value.(type) {
-	case nil:
-		buffer.WriteString("null")
-	case bool:
-		if typed {
-			buffer.WriteString("true")
-		} else {
-			buffer.WriteString("false")
-		}
-	case string:
-		encoded, err := json.Marshal(typed)
-		if err != nil {
-			return err
-		}
-		buffer.Write(encoded)
-	case json.Number:
-		buffer.WriteString(typed.String())
-	case float64:
-		encoded, err := json.Marshal(typed)
-		if err != nil {
-			return err
-		}
-		buffer.Write(encoded)
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-
-		buffer.WriteByte('{')
-		for i, key := range keys {
-			if i > 0 {
-				buffer.WriteByte(',')
-			}
-			encodedKey, err := json.Marshal(key)
-			if err != nil {
-				return err
-			}
-			buffer.Write(encodedKey)
-			buffer.WriteByte(':')
-			if err := writeCanonicalJSON(buffer, typed[key]); err != nil {
-				return err
-			}
-		}
-		buffer.WriteByte('}')
-	case []any:
-		buffer.WriteByte('[')
-		for i, item := range typed {
-			if i > 0 {
-				buffer.WriteByte(',')
-			}
-			if err := writeCanonicalJSON(buffer, item); err != nil {
-				return err
-			}
-		}
-		buffer.WriteByte(']')
-	default:
-		encoded, err := json.Marshal(typed)
-		if err != nil {
-			return err
-		}
-		buffer.Write(encoded)
-	}
-
-	return nil
 }

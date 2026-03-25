@@ -32,7 +32,7 @@ func OpenStorage(path string) (*Storage, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	// In WAL mode, SQLite supports multiple readers and one writer.
+	// WAL mode for better concurrency
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(time.Hour)
@@ -52,54 +52,49 @@ func OpenStorage(path string) (*Storage, error) {
 	return storage, nil
 }
 
-func (s *Storage) worker() {
-	defer close(s.closed)
-	for task := range s.queue {
-		if err := s.saveExchangeSync(task.request, task.response, task.usage); err != nil {
-			fmt.Fprintf(os.Stderr, "sqlite worker error: %v\n", err)
-		}
-	}
-}
-
-func (s *Storage) Close() error {
-	close(s.queue)
-	<-s.closed
-	return s.db.Close()
-}
-
 func (s *Storage) init() error {
 	statements := []string{
 		`PRAGMA journal_mode = WAL;`,
 		`PRAGMA foreign_keys = ON;`,
 		`PRAGMA busy_timeout = 5000;`,
+		// 1. Metadata tables
 		`CREATE TABLE IF NOT EXISTS request_logs (
 			id TEXT PRIMARY KEY,
-			created_at INTEGER NOT NULL,
+			model TEXT NOT NULL,
 			path TEXT NOT NULL,
-			model TEXT,
 			cache_key TEXT,
-			request_body TEXT
+			created_at INTEGER NOT NULL
 		);`,
 		`CREATE TABLE IF NOT EXISTS response_logs (
 			request_id TEXT PRIMARY KEY,
-			status_code INTEGER,
-			response_body TEXT,
+			status_code INTEGER NOT NULL,
 			duration_ms INTEGER NOT NULL,
-			from_cache INTEGER NOT NULL DEFAULT 0,
+			from_cache INTEGER DEFAULT 0,
 			cache_hit_request_id TEXT,
-			FOREIGN KEY(request_id) REFERENCES request_logs(id)
+			FOREIGN KEY(request_id) REFERENCES request_logs(id) ON DELETE CASCADE
 		);`,
+		// 2. Dedicated body tables
+		`CREATE TABLE IF NOT EXISTS request_bodies (
+			request_id TEXT PRIMARY KEY,
+			content TEXT NOT NULL,
+			FOREIGN KEY(request_id) REFERENCES request_logs(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS response_bodies (
+			request_id TEXT PRIMARY KEY,
+			content TEXT NOT NULL,
+			FOREIGN KEY(request_id) REFERENCES request_logs(id) ON DELETE CASCADE
+		);`,
+		// 3. Usage table
 		`CREATE TABLE IF NOT EXISTS usage_logs (
 			request_id TEXT PRIMARY KEY,
 			prompt_tokens INTEGER,
 			completion_tokens INTEGER,
 			total_tokens INTEGER,
 			cached_tokens INTEGER,
-			FOREIGN KEY(request_id) REFERENCES request_logs(id)
+			FOREIGN KEY(request_id) REFERENCES request_logs(id) ON DELETE CASCADE
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_request_logs_cache_key ON request_logs(cache_key);`,
-		`CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_request_logs_model ON request_logs(model);`,
+		`CREATE INDEX IF NOT EXISTS idx_requests_created_at ON request_logs(created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_requests_cache_key ON request_logs(cache_key);`,
 	}
 
 	for _, statement := range statements {
@@ -107,7 +102,6 @@ func (s *Storage) init() error {
 			return fmt.Errorf("initialize sqlite: %w", err)
 		}
 	}
-
 	return nil
 }
 
@@ -116,8 +110,16 @@ func (s *Storage) SaveExchange(request RequestLog, response ResponseLog, usage *
 	case s.queue <- exchangeTask{request, response, usage}:
 		return nil
 	default:
-		// Drop the log if the queue is full to avoid blocking the request path
 		return fmt.Errorf("storage queue full, dropping log for %s", request.ID)
+	}
+}
+
+func (s *Storage) worker() {
+	defer close(s.closed)
+	for task := range s.queue {
+		if err := s.saveExchangeSync(task.request, task.response, task.usage); err != nil {
+			fmt.Fprintf(os.Stderr, "sqlite worker error: %v\n", err)
+		}
 	}
 }
 
@@ -128,23 +130,22 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 	}
 	defer tx.Rollback()
 
+	// 1. Metadata
 	if _, err := tx.Exec(
-		`INSERT INTO request_logs (id, created_at, path, model, cache_key, request_body) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO request_logs (id, model, path, cache_key, created_at) VALUES (?, ?, ?, ?, ?)`,
 		request.ID,
-		request.CreatedAt.UnixMilli(),
+		request.Model,
 		request.Path,
-		nullIfEmpty(request.Model),
 		nullIfEmpty(request.CacheKey),
-		nullIfEmpty(request.RequestBody),
+		request.CreatedAt.UnixMilli(),
 	); err != nil {
 		return fmt.Errorf("insert request log: %w", err)
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO response_logs (request_id, status_code, response_body, duration_ms, from_cache, cache_hit_request_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO response_logs (request_id, status_code, duration_ms, from_cache, cache_hit_request_id) VALUES (?, ?, ?, ?, ?)`,
 		response.RequestID,
 		response.StatusCode,
-		nullIfEmpty(response.ResponseBody),
 		response.DurationMS,
 		boolToInt(response.FromCache),
 		nullIfEmpty(response.CacheHitRequestID),
@@ -152,6 +153,19 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 		return fmt.Errorf("insert response log: %w", err)
 	}
 
+	// 2. Bodies
+	if request.RequestBody != "" {
+		if _, err := tx.Exec(`INSERT INTO request_bodies (request_id, content) VALUES (?, ?)`, request.ID, request.RequestBody); err != nil {
+			return fmt.Errorf("insert request body: %w", err)
+		}
+	}
+	if response.ResponseBody != "" {
+		if _, err := tx.Exec(`INSERT INTO response_bodies (request_id, content) VALUES (?, ?)`, response.RequestID, response.ResponseBody); err != nil {
+			return fmt.Errorf("insert response body: %w", err)
+		}
+	}
+
+	// 3. Usage
 	if usage != nil {
 		if _, err := tx.Exec(
 			`INSERT INTO usage_logs (request_id, prompt_tokens, completion_tokens, total_tokens, cached_tokens) VALUES (?, ?, ?, ?, ?)`,
@@ -168,7 +182,6 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit sqlite transaction: %w", err)
 	}
-
 	return nil
 }
 
@@ -178,18 +191,18 @@ func (s *Storage) FindCachedResponse(cacheKey string, maxBodyBytes int64) (*Cach
 	}
 
 	query := `
-		SELECT rl.id, rs.status_code, rs.response_body
+		SELECT rl.id, rs.status_code, rb.content
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
+		JOIN response_bodies rb ON rb.request_id = rl.id
 		WHERE rl.cache_key = ?
 		  AND rs.status_code = 200
-		  AND rs.response_body IS NOT NULL
-		  AND rs.response_body != ''
+		  AND rs.from_cache = 0
 	`
 
 	args := []any{cacheKey}
 	if maxBodyBytes > 0 {
-		query += ` AND LENGTH(rs.response_body) <= ?`
+		query += ` AND LENGTH(rb.content) <= ?`
 		args = append(args, maxBodyBytes)
 	}
 
@@ -213,11 +226,13 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 			rl.id, rl.created_at, rl.model, rl.path, 
 			rs.status_code, rs.duration_ms, 
 			COALESCE(ul.total_tokens, 0),
-			COALESCE(SUBSTR(rl.request_body, 1, 200), ''),
-			COALESCE(SUBSTR(rs.response_body, 1, 200), '')
+			COALESCE(SUBSTR(rb.content, 1, 200), ''),
+			COALESCE(SUBSTR(rsb.content, 1, 200), '')
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		LEFT JOIN request_bodies rb ON rb.request_id = rl.id
+		LEFT JOIN response_bodies rsb ON rsb.request_id = rl.id
 		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 		ORDER BY rl.created_at DESC
 		LIMIT ?
@@ -248,12 +263,14 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 		SELECT 
 			rl.id, rl.created_at, rl.model, rl.path, 
 			rs.status_code, rs.duration_ms, 
-			COALESCE(rs.response_body, ''),
-			COALESCE(rl.request_body, ''),
+			COALESCE(rsb.content, ''),
+			COALESCE(rb.content, ''),
 			COALESCE(ul.total_tokens, 0)
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		LEFT JOIN request_bodies rb ON rb.request_id = rl.id
+		LEFT JOIN response_bodies rsb ON rsb.request_id = rl.id
 		WHERE rl.id = ?
 	`, id).Scan(
 		&d.ID, &d.CreatedAt, &d.Model, &d.Path,
@@ -369,6 +386,12 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 	}
 
 	return reports, nil
+}
+
+func (s *Storage) Close() error {
+	close(s.queue)
+	<-s.closed
+	return s.db.Close()
 }
 
 func boolToInt(value bool) int {

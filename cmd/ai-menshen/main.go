@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	aimenshen "ai-menshen/internal"
+	aimenshen "github.com/jiacai2050/ai-menshen/internal"
 )
 
 func main() {
