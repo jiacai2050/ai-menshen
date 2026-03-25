@@ -97,7 +97,8 @@ func buildCacheKey(path string, payload map[string]any) string {
 	defer sha256Pool.Put(h)
 
 	h.Write(buf.Bytes())
-	return hex.EncodeToString(h.Sum(nil))
+	var sum [sha256.Size]byte
+	return hex.EncodeToString(h.Sum(sum[:0]))
 }
 
 func writeCanonicalJSON(w io.Writer, value any, isRootRequest bool) {
