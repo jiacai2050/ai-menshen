@@ -353,8 +353,8 @@ func (g *Gateway) getDays(r *http.Request) int {
 	daysStr := r.URL.Query().Get("days")
 	days := 14 // default
 	if daysStr != "" {
-		if d, err := fmt.Sscanf(daysStr, "%d", &days); err == nil && d > 0 {
-			// days is set from Sscanf
+if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+			days = d
 		}
 	}
 	return days
