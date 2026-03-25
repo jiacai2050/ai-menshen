@@ -43,13 +43,31 @@ It has zero external CDN calls. All JS/CSS is embedded, making it perfect for of
 | :---: | :---: |
 | ![Overview](docs/screenshot-overview.webp) | ![Logs](docs/screenshot-logs.webp) |
 
+## Installation
+
+### Via Go Install
+
+```bash
+go install github.com/jiacai2050/ai-menshen@latest
+```
+
+### From Source
+
+```bash
+git clone https://github.com/jiacai2050/ai-menshen.git
+cd ai-menshen
+make build
+# The binary 'ai-menshen' will be available in the current directory
+```
+
 ## Quick Start
 
 1. **Run**:
    ```bash
    cp configs/example.toml config.toml
    # Add your upstream API key to config.toml
-   go run ./cmd/ai-menshen -config config.toml
+   go run main.go -config config.toml
+
    ```
 
 2. **Connect**:

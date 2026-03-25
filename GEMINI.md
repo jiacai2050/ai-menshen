@@ -16,9 +16,9 @@ ai-menshen now does more than basic auth injection:
 
 ## Architecture Overview
 
-The repository now follows the common Go `cmd` / `internal` layout:
+The repository follows a simple Go layout:
 
-- `cmd/ai-menshen/main.go`: thin binary entrypoint
+- `main.go`: thin binary entrypoint at the root
 - `internal/config.go`: TOML config loading and CLI parsing
 - `internal/proxy.go`: request handling, upstream forwarding, cache replay, and reports
 - `internal/storage.go`: SQLite setup and persistence

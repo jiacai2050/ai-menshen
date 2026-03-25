@@ -1,5 +1,5 @@
 build:
-	go build -o ai-menshen ./cmd/ai-menshen
+	go build -o ai-menshen main.go
 
 test:
 	go test -v ./internal/...
@@ -25,7 +25,8 @@ vet:
 	go vet ./...
 
 run:
-	go run ./cmd/ai-menshen/main.go -config configs/config.toml
+	go run main.go -config configs/config.toml
+
 
 check: fmt-check vet test
 
