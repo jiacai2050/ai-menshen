@@ -35,7 +35,7 @@ The cache key calculation is designed for high-throughput environments:
 
 - **Zero Deep-Cloning**: The normalization happens "on-the-fly" during serialization. We do not create a copy of the request tree in memory.
 - **Buffer Pooling**: Uses `sync.Pool` to reuse `bytes.Buffer` and `sha256.Hash` objects, significantly reducing GC pressure.
-- **Streaming Hashing**: Data is written directly into the hashing engine via a pooled buffer, minimizing memory allocations.
+- **Buffered Hashing**: Canonical JSON is built in a pooled buffer and then hashed in a single write, minimizing allocations while keeping the implementation simple.
 
 ## 5. Storage & Retrieval
 - **Backend**: SQLite `response_logs` table.
