@@ -3,10 +3,8 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
+    branches:
+      - main
   pull_request:
     paths:
       - "**.go"

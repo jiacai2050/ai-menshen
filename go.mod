@@ -1,4 +1,4 @@
-module ai-menshen
+module github.com/jiacai2050/ai-menshen
 
 go 1.25.0
 

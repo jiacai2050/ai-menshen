@@ -24,6 +24,9 @@ fmt-check:
 vet:
 	go vet ./...
 
+run:
+	go run ./cmd/ai-menshen/main.go -config configs/config.toml
+
 check: fmt-check vet test
 
-.PHONY: build test fmt fmt-check vet check
+.PHONY: build test fmt fmt-check vet check run

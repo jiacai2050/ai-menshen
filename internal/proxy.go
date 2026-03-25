@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"ai-menshen/internal/web"
+	"github.com/jiacai2050/ai-menshen/internal/web"
 )
 
 const (
