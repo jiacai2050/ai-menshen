@@ -1,4 +1,29 @@
 build:
 	go build -o ai-menshen ./cmd/ai-menshen
 
-.PHONY: build
+test:
+	go test -v ./internal/...
+
+fmt:
+	gofmt -w $$(git ls-files '*.go')
+
+fmt-check:
+	@if [ -n "$$(git status --porcelain -s)" ]; then \
+		echo "Working directory is not clean. Please commit or stash changes before running fmt-check."; \
+		exit 1; \
+	fi
+	@$(MAKE) fmt
+	@if [ -z "$$(git status --porcelain)" ]; then \
+		echo "All files are formatted correctly."; \
+	else \
+		echo "The following files were not formatted. Please run 'make fmt' and commit the changes:"; \
+		git status --porcelain; \
+		exit 1; \
+	fi
+
+vet:
+	go vet ./...
+
+check: fmt-check vet test
+
+.PHONY: build test fmt-check vet check
