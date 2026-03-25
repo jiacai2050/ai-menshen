@@ -353,7 +353,7 @@ func (g *Gateway) getDays(r *http.Request) int {
 	daysStr := r.URL.Query().Get("days")
 	days := 14 // default
 	if daysStr != "" {
-if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
 			days = d
 		}
 	}
