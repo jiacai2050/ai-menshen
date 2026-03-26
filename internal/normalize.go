@@ -85,6 +85,8 @@ func decodeJSONObject(body []byte) (map[string]any, bool) {
 	return object, ok
 }
 
+const cacheVersion = "v1"
+
 func buildCacheKey(path string, payload map[string]any) (string, error) {
 	buf := bufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
@@ -111,7 +113,7 @@ func buildCacheKey(path string, payload map[string]any) (string, error) {
 	defer sha256Pool.Put(h)
 
 	h.Write(buf.Bytes())
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return cacheVersion + ":" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func writeCanonicalJSON(w io.Writer, value any, isRootRequest bool) error {
