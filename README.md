@@ -141,7 +141,7 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | :--- | :--- | :--- | :--- |
 | **Global** | `listen` | Local bind address | `:8080` |
 | **Auth** | `enable` | Enable authentication for proxy & dashboard | `false` |
-| | `user` | Username for **Dashboard** (Basic Auth) | `admin` |
+| | `user` | Username for **Dashboard** (Basic Auth) | - |
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
 | | `token` | Token for **API Requests** (Bearer Auth) | - |
 | **Providers** | `base_url` | Upstream endpoint (Required) | - |
