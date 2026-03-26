@@ -28,11 +28,11 @@ func main() {
 	if cli.Version {
 		fmt.Printf("ai-menshen %s\n", Version)
 		if info, ok := debug.ReadBuildInfo(); ok {
-			for _, setting := range info.Settings {
-				if setting.Key == "vcs.revision" {
+for _, setting := range info.Settings {
+				switch setting.Key {
+				case "vcs.revision":
 					fmt.Printf("Revision: %s\n", setting.Value)
-				}
-				if setting.Key == "vcs.time" {
+				case "vcs.time":
 					fmt.Printf("Build Time: %s\n", setting.Value)
 				}
 			}
