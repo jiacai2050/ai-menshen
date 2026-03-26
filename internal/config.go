@@ -109,6 +109,18 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
+	if cfg.Auth.Enable {
+		if strings.TrimSpace(cfg.Auth.User) == "" {
+			return cfg, fmt.Errorf("config.auth.user is required when auth is enabled")
+		}
+		if strings.TrimSpace(cfg.Auth.Password) == "" {
+			return cfg, fmt.Errorf("config.auth.password is required when auth is enabled")
+		}
+		if strings.TrimSpace(cfg.Auth.Token) == "" {
+			return cfg, fmt.Errorf("config.auth.token is required when auth is enabled")
+		}
+	}
+
 	if len(cfg.Providers) == 0 {
 		return cfg, fmt.Errorf("config.providers must contain at least one provider")
 	}
