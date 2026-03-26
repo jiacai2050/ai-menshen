@@ -89,7 +89,7 @@ func LoadConfig(path string) (Config, error) {
 		Listen: ":8080",
 		Storage: StorageConfig{
 			SQLitePath:    "./data/ai-menshen.db",
-			RetentionDays: 30,
+			RetentionDays: 90,
 		},
 		Cache: CacheConfig{
 			MaxBodyBytes: 1 << 20,
@@ -110,6 +110,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	if cfg.Auth.Enable {
+		cfg.Auth.Password = os.ExpandEnv(cfg.Auth.Password)
+		cfg.Auth.Token = os.ExpandEnv(cfg.Auth.Token)
+
 		if strings.TrimSpace(cfg.Auth.User) == "" {
 			return cfg, fmt.Errorf("config.auth.user is required when auth is enabled")
 		}

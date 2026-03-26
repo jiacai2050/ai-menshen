@@ -3,8 +3,10 @@ package aimenshen
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,6 +16,7 @@ type Storage struct {
 	db     *sql.DB
 	queue  chan exchangeTask
 	closed chan struct{}
+	wg     sync.WaitGroup
 }
 
 type exchangeTask struct {
@@ -22,12 +25,15 @@ type exchangeTask struct {
 	usage    *UsageLog
 }
 
-func OpenStorage(path string) (*Storage, error) {
+func OpenStorage(cfg StorageConfig) (*Storage, error) {
+	path := cfg.SQLitePath
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", path)
+	// Use URI DSN to ensure pragmas apply to all connections in the pool
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", path)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -47,16 +53,62 @@ func OpenStorage(path string) (*Storage, error) {
 		return nil, err
 	}
 
+	storage.wg.Add(2)
 	go storage.worker()
+	go storage.retentionWorker(cfg.RetentionDays)
 
 	return storage, nil
 }
 
+func (s *Storage) retentionWorker(days int) {
+	defer s.wg.Done()
+	if days <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	// Initial cleanup on start
+	if err := s.Cleanup(days); err != nil {
+		log.Printf("initial storage cleanup error: %v", err)
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := s.Cleanup(days); err != nil {
+				log.Printf("periodic storage cleanup error: %v", err)
+			}
+		case <-s.closed:
+			return
+		}
+	}
+}
+
+func (s *Storage) Cleanup(days int) error {
+	if days <= 0 {
+		return nil
+	}
+
+	threshold := time.Now().AddDate(0, 0, -days).UnixMilli()
+	res, err := s.db.Exec(`DELETE FROM request_logs WHERE created_at < ?`, threshold)
+	if err != nil {
+		return fmt.Errorf("execute cleanup delete: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get cleanup rows affected: %w", err)
+	}
+
+	if rows > 0 {
+		log.Printf("Storage cleanup: deleted %d expired log entries older than %d days", rows, days)
+	}
+	return nil
+}
+
 func (s *Storage) init() error {
 	statements := []string{
-		`PRAGMA journal_mode = WAL;`,
-		`PRAGMA foreign_keys = ON;`,
-		`PRAGMA busy_timeout = 5000;`,
 		// 1. Metadata tables
 		`CREATE TABLE IF NOT EXISTS request_logs (
 			id TEXT PRIMARY KEY,
@@ -115,7 +167,7 @@ func (s *Storage) SaveExchange(request RequestLog, response ResponseLog, usage *
 }
 
 func (s *Storage) worker() {
-	defer close(s.closed)
+	defer s.wg.Done()
 	for task := range s.queue {
 		if err := s.saveExchangeSync(task.request, task.response, task.usage); err != nil {
 			fmt.Fprintf(os.Stderr, "sqlite worker error: %v\n", err)
@@ -389,8 +441,10 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 }
 
 func (s *Storage) Close() error {
+	log.Printf("Storage: closing workers and queue...")
+	close(s.closed)
 	close(s.queue)
-	<-s.closed
+	s.wg.Wait()
 	return s.db.Close()
 }
 

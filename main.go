@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
+	"time"
 
 	aimenshen "github.com/jiacai2050/ai-menshen/internal"
 )
@@ -45,11 +49,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	storage, err := aimenshen.OpenStorage(cfg.Storage.SQLitePath)
+	storage, err := aimenshen.OpenStorage(cfg.Storage)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer storage.Close()
+	defer func() {
+		if err := storage.Close(); err != nil {
+			log.Printf("Close storage failed, err: %v", err)
+		}
+	}()
 
 	handler, err := aimenshen.NewGateway(cfg, storage)
 	if err != nil {
@@ -62,5 +70,56 @@ func main() {
 		log.Printf("Provider model override enabled: %s", provider.Model)
 	}
 
-	log.Fatal(http.ListenAndServe(cfg.Listen, handler))
+	server := &http.Server{
+		Addr:    cfg.Listen,
+		Handler: handler,
+	}
+
+	// Server run context
+	serverCtx, serverStopCtx := context.WithCancel(context.Background())
+	// Listen for syscall signals for process to interrupt/quit
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	shutdownErr := make(chan error, 1)
+
+	go func() {
+		<-sig
+
+		// Shutdown signal with grace period
+		shutdownCtx, cancel := context.WithTimeout(serverCtx, 10*time.Second)
+		defer cancel()
+
+		go func() {
+			<-shutdownCtx.Done()
+			if shutdownCtx.Err() == context.DeadlineExceeded {
+				log.Printf("graceful shutdown timed out.. forcing exit.")
+				serverStopCtx()
+			}
+		}()
+
+		// Trigger graceful shutdown
+		err := server.Shutdown(shutdownCtx)
+		if err != nil {
+			shutdownErr <- err
+		}
+		serverStopCtx()
+	}()
+
+	// Run the server
+	err = server.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+
+	// Wait for server context to be stopped
+	<-serverCtx.Done()
+
+	select {
+	case err := <-shutdownErr:
+		log.Printf("server shutdown error: %v", err)
+	default:
+	}
+
+	log.Printf("Shutting down storage...")
+
 }
