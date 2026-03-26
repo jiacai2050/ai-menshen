@@ -105,9 +105,10 @@ make build
 
     **REST API**:
     ```bash
+    # Match [auth].token if auth.enable = true (can be anything if false)
     curl http://localhost:8080/chat/completions \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer your-auth-token" \ # Match [auth].token if auth.enable = true (can be anything if false)
+      -H "Authorization: Bearer your-auth-token" \
       -d '{
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "Hello!"}]
