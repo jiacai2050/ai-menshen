@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -15,6 +16,7 @@ type Storage struct {
 	db     *sql.DB
 	queue  chan exchangeTask
 	closed chan struct{}
+	wg     sync.WaitGroup
 }
 
 type exchangeTask struct {
@@ -51,6 +53,7 @@ func OpenStorage(cfg StorageConfig) (*Storage, error) {
 		return nil, err
 	}
 
+	storage.wg.Add(2)
 	go storage.worker()
 	go storage.retentionWorker(cfg.RetentionDays)
 
@@ -58,6 +61,7 @@ func OpenStorage(cfg StorageConfig) (*Storage, error) {
 }
 
 func (s *Storage) retentionWorker(days int) {
+	defer s.wg.Done()
 	if days <= 0 {
 		return
 	}
@@ -97,7 +101,9 @@ func (s *Storage) Cleanup(days int) error {
 		return fmt.Errorf("get cleanup rows affected: %w", err)
 	}
 
-	log.Printf("Storage cleanup: deleted %d expired log entries older than %d days", rows, days)
+	if rows > 0 {
+		log.Printf("Storage cleanup: deleted %d expired log entries older than %d days", rows, days)
+	}
 	return nil
 }
 
@@ -435,8 +441,9 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 }
 
 func (s *Storage) Close() error {
+	close(s.closed)
 	close(s.queue)
-	<-s.closed
+	s.wg.Wait()
 	return s.db.Close()
 }
 
