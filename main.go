@@ -53,7 +53,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer storage.Close()
+	defer func() {
+		if err := storage.Close(); err != nil {
+			log.Printf("Close storage failed, err: %v", err)
+		}
+	}()
 
 	handler, err := aimenshen.NewGateway(cfg, storage)
 	if err != nil {
@@ -73,10 +77,11 @@ func main() {
 
 	// Server run context
 	serverCtx, serverStopCtx := context.WithCancel(context.Background())
-
 	// Listen for syscall signals for process to interrupt/quit
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	shutdownErr := make(chan error, 1)
+
 	go func() {
 		<-sig
 
@@ -87,14 +92,15 @@ func main() {
 		go func() {
 			<-shutdownCtx.Done()
 			if shutdownCtx.Err() == context.DeadlineExceeded {
-				log.Fatal("graceful shutdown timed out.. forcing exit.")
+				log.Printf("graceful shutdown timed out.. forcing exit.")
+				serverStopCtx()
 			}
 		}()
 
 		// Trigger graceful shutdown
 		err := server.Shutdown(shutdownCtx)
 		if err != nil {
-			log.Fatal(err)
+			shutdownErr <- err
 		}
 		serverStopCtx()
 	}()
@@ -107,5 +113,13 @@ func main() {
 
 	// Wait for server context to be stopped
 	<-serverCtx.Done()
-	log.Printf("ai-menshen shutdown complete")
+
+	select {
+	case err := <-shutdownErr:
+		log.Printf("server shutdown error: %v", err)
+	default:
+	}
+
+	log.Printf("Shutting down storage...")
+
 }

@@ -441,6 +441,7 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 }
 
 func (s *Storage) Close() error {
+	log.Printf("Storage: closing workers and queue...")
 	close(s.closed)
 	close(s.queue)
 	s.wg.Wait()
