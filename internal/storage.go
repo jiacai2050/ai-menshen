@@ -22,7 +22,8 @@ type exchangeTask struct {
 	usage    *UsageLog
 }
 
-func OpenStorage(path string) (*Storage, error) {
+func OpenStorage(cfg StorageConfig) (*Storage, error) {
+	path := cfg.SQLitePath
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
 	}
@@ -48,8 +49,48 @@ func OpenStorage(path string) (*Storage, error) {
 	}
 
 	go storage.worker()
+	go storage.retentionWorker(cfg.RetentionDays)
 
 	return storage, nil
+}
+
+func (s *Storage) retentionWorker(days int) {
+	if days <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	// Initial cleanup on start
+	s.Cleanup(days)
+
+	for {
+		select {
+		case <-ticker.C:
+			s.Cleanup(days)
+		case <-s.closed:
+			return
+		}
+	}
+}
+
+func (s *Storage) Cleanup(days int) {
+	if days <= 0 {
+		return
+	}
+
+	threshold := time.Now().AddDate(0, 0, -days).UnixMilli()
+	res, err := s.db.Exec(`DELETE FROM request_logs WHERE created_at < ?`, threshold)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sqlite cleanup error: %v\n", err)
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows > 0 {
+		log.Printf("Storage cleanup: deleted %d expired log entries older than %d days", rows, days)
+	}
 }
 
 func (s *Storage) init() error {

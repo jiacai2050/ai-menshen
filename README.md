@@ -145,7 +145,6 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
 | | `token` | Token for **API Requests** (Bearer Auth) | - |
 | **Providers** | `base_url` | Upstream endpoint (Required) | - |
-
 | | `api_key` | Upstream key (Supports env) | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |

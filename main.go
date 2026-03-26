@@ -45,7 +45,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	storage, err := aimenshen.OpenStorage(cfg.Storage.SQLitePath)
+	storage, err := aimenshen.OpenStorage(cfg.Storage)
 	if err != nil {
 		log.Fatal(err)
 	}

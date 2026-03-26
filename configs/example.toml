@@ -19,7 +19,7 @@ api_key = "${OPENAI_API_KEY}"
 
 [storage]
 sqlite_path = "./data/menshen.db"
-retention_days = 30
+retention_days = 90
 
 [cache]
 enable = true
