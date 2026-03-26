@@ -167,7 +167,7 @@ func (s *Storage) SaveExchange(request RequestLog, response ResponseLog, usage *
 }
 
 func (s *Storage) worker() {
-	defer close(s.closed)
+	defer s.wg.Done()
 	for task := range s.queue {
 		if err := s.saveExchangeSync(task.request, task.response, task.usage); err != nil {
 			fmt.Fprintf(os.Stderr, "sqlite worker error: %v\n", err)
