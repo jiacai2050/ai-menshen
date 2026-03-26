@@ -84,6 +84,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case reportModelsPath:
 			g.handleModelReport(w, r)
 			return
+		case reportSummaryPath:
+			g.handleSummaryReport(w, r)
+			return
+		case reportDailyPath:
+			g.handleDailyReport(w, r)
+			return
+		case reportLogsPath:
+			g.handleLogsReport(w, r)
+			return
+		case reportLogDetailPath:
+			g.handleLogDetailReport(w, r)
+			return
+		}
+	}
 
 	startedAt := time.Now()
 
