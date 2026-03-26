@@ -1,6 +1,14 @@
 listen = ":8080"
 verbose = false
 
+[auth]
+enable = false
+# Used for browser-based Dashboard access (User:Password)
+user = "admin"
+password = "your-password-here"
+# Used for API proxying (Authorization: Bearer <token>)
+token = "sk-your-proxy-token"
+
 [[providers]]
 base_url = "https://api.openai.com/v1"
 api_key = "${OPENAI_API_KEY}"

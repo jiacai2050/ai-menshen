@@ -15,10 +15,18 @@ import (
 type Config struct {
 	Listen    string           `toml:"listen"`
 	Verbose   bool             `toml:"verbose"`
+	Auth      AuthConfig       `toml:"auth"`
 	Providers []ProviderConfig `toml:"providers"`
 	Storage   StorageConfig    `toml:"storage"`
 	Cache     CacheConfig      `toml:"cache"`
 	Logging   LoggingConfig    `toml:"logging"`
+}
+
+type AuthConfig struct {
+	Enable   bool   `toml:"enable"`
+	User     string `toml:"user"`
+	Password string `toml:"password"`
+	Token    string `toml:"token"`
 }
 
 type ProviderConfig struct {
@@ -99,6 +107,18 @@ func LoadConfig(path string) (Config, error) {
 
 	if err := toml.Unmarshal(content, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	if cfg.Auth.Enable {
+		if strings.TrimSpace(cfg.Auth.User) == "" {
+			return cfg, fmt.Errorf("config.auth.user is required when auth is enabled")
+		}
+		if strings.TrimSpace(cfg.Auth.Password) == "" {
+			return cfg, fmt.Errorf("config.auth.password is required when auth is enabled")
+		}
+		if strings.TrimSpace(cfg.Auth.Token) == "" {
+			return cfg, fmt.Errorf("config.auth.token is required when auth is enabled")
+		}
 	}
 
 	if len(cfg.Providers) == 0 {
