@@ -3,11 +3,17 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 
 	aimenshen "github.com/jiacai2050/ai-menshen/internal"
+)
+
+var (
+	Version = "dev"
 )
 
 func main() {
@@ -17,6 +23,21 @@ func main() {
 			return
 		}
 		log.Fatal(err)
+	}
+
+	if cli.Version {
+		fmt.Printf("ai-menshen %s\n", Version)
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, setting := range info.Settings {
+				switch setting.Key {
+				case "vcs.revision":
+					fmt.Printf("Revision: %s\n", setting.Value)
+				case "vcs.time":
+					fmt.Printf("Build Time: %s\n", setting.Value)
+				}
+			}
+		}
+		return
 	}
 
 	cfg, err := aimenshen.LoadConfig(cli.ConfigPath)
