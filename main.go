@@ -28,7 +28,7 @@ func main() {
 	if cli.Version {
 		fmt.Printf("ai-menshen %s\n", Version)
 		if info, ok := debug.ReadBuildInfo(); ok {
-for _, setting := range info.Settings {
+			for _, setting := range info.Settings {
 				switch setting.Key {
 				case "vcs.revision":
 					fmt.Printf("Revision: %s\n", setting.Value)

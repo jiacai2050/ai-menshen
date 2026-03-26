@@ -1,7 +1,8 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 build:
-	go build -ldflags "-X main.Version=$(VERSION)" -o ai-menshen main.go
+	go build -ldflags "-X main.Version=$(VERSION)" -o ai-menshen .
+
 
 test:
 	go test -v ./internal/...

@@ -15,7 +15,7 @@ builds:
     goarch:
       - amd64
       - arm64
-    main: ./main.go
+    main: .
     ldflags:
       - -s -w -X main.Version={{.Version}}
 
