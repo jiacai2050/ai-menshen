@@ -26,13 +26,13 @@ archives:
       - goos: windows
         format: zip
     name_template: >-
-      {{ .ProjectName | lower }}_
-      {{- .Version | lower }}_
-      {{- .Os | lower }}_
+      {{ .ProjectName | tolower }}_
+      {{- .Tag | tolower }}_
+      {{- .Os | tolower }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch | lower }}{{ end }}
-      {{- if .Arm }}v{{ .Arm | lower }}{{ end }}
+      {{- else }}{{ .Arch | tolower }}{{ end }}
+      {{- if .Arm }}v{{ .Arm | tolower }}{{ end }}
     files:
       - LICENSE
       - README.md

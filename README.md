@@ -45,6 +45,25 @@ It has zero external CDN calls. All JS/CSS is embedded, making it perfect for of
 
 ## Installation
 
+### One-liner (Linux & macOS)
+
+*Download and install the pre-built binary from GitHub Releases.*
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.sh | sh
+```
+
+The script supports custom version and installation directory:
+```bash
+# Pass arguments using sh -s --
+curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.sh | sh -s -- --version v1.0.0 --install-dir /usr/local/bin
+```
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--version`, `-v` | Release version to install | `latest` |
+| `--install-dir`, `-d` | Directory to install binary | `~/.local/bin` |
+
 ### Via Go Install
 
 ```bash
@@ -62,21 +81,57 @@ make build
 
 ## Quick Start
 
-1. **Run**:
-   ```bash
-   cp configs/example.toml config.toml
-   # Add your upstream API key to config.toml
-   go run main.go -config config.toml
+1.  **Install binary** (choose one):
+    *   [One-liner (Linux & macOS)](#one-liner-linux--macos)
+    *   `go install github.com/jiacai2050/ai-menshen@latest`
+    *   [From Source](#from-source)
 
-   ```
+2.  **Setup config**:
+    ```bash
+    mkdir -p ~/.config/ai-menshen
+    # Download the example config
+    curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/configs/example.toml -o ~/.config/ai-menshen/config.toml
+    # Edit with your upstream API key
+    vi ~/.config/ai-menshen/config.toml
+    ```
 
-2. **Connect**:
-   Point your client to `http://localhost:8080`. For streaming usage auditing, ensure `stream_options={"include_usage": True}` is set.
+3.  **Run**:
+    ```bash
+    ai-menshen -config ~/.config/ai-menshen/config.toml
+    ```
 
-3. **Report**:
-   ```bash
-   curl http://localhost:8080/__report/models
-   ```
+4.  **Connect**:
+    Point your OpenAI client to `http://localhost:8080/v1`.
+
+    **REST API**:
+    ```bash
+    curl http://localhost:8080/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello!"}]
+      }'
+    ```
+
+    **Python SDK**:
+    ```python
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url="http://localhost:8080/v1",
+        api_key="not-needed" # Real key is injected by ai-menshen
+    )
+
+    # For streaming usage auditing, set include_usage=True
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello!"}],
+        stream=True,
+        stream_options={"include_usage": True}
+    )
+    for chunk in response:
+        print(chunk.choices[0].delta.content or "", end="")
+    ```
 
 ## Configuration Guide
 
