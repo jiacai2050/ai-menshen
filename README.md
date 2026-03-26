@@ -107,6 +107,7 @@ make build
     ```bash
     curl http://localhost:8080/chat/completions \
       -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-auth-token" \ # Match [auth].token if auth.enable = true (can be anything if false)
       -d '{
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "Hello!"}]
@@ -119,7 +120,7 @@ make build
 
     client = OpenAI(
         base_url="http://localhost:8080",
-        api_key="not-needed" # Real key is injected by ai-menshen
+        api_key="your-auth-token" # Match [auth].token if auth.enable = true (can be anything if false)
     )
 
     # For streaming usage auditing, set include_usage=True
@@ -135,7 +136,7 @@ make build
 
 ## Configuration Guide
 
-Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key` and `headers` values support **Environment Variables** (e.g., `${KEY}`).
+Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key`, `password`, `token` and `headers` values support **Environment Variables** (e.g., `${KEY}`).
 
 | Section | Field | Description | Default |
 | :--- | :--- | :--- | :--- |
@@ -145,9 +146,10 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
 | | `token` | Token for **API Requests** (Bearer Auth) | - |
 | **Providers** | `base_url` | Upstream endpoint (Required) | - |
-| | `api_key` | Upstream key (Supports env) | - |
+| | `api_key` | Upstream key | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |
 | **Storage** | `sqlite_path` | SQLite database location | `./data/ai-menshen.db` |
+| | `retention_days` | Automatically purge logs older than X days | `90` |
 | **Cache** | `enable` | Cache non-stream 200 responses | `true` |
 | **Logging** | `log_request_body` | Persist full requests in DB | `true` |
