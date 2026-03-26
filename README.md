@@ -101,11 +101,11 @@ make build
     ```
 
 4.  **Connect**:
-    Point your OpenAI client to `http://localhost:8080/v1`.
+    Point your OpenAI client to `http://localhost:8080`.
 
     **REST API**:
     ```bash
-    curl http://localhost:8080/v1/chat/completions \
+    curl http://localhost:8080/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
         "model": "gpt-4o",
@@ -118,7 +118,7 @@ make build
     from openai import OpenAI
 
     client = OpenAI(
-        base_url="http://localhost:8080/v1",
+        base_url="http://localhost:8080",
         api_key="not-needed" # Real key is injected by ai-menshen
     )
 
@@ -140,7 +140,12 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | Section | Field | Description | Default |
 | :--- | :--- | :--- | :--- |
 | **Global** | `listen` | Local bind address | `:8080` |
+| **Auth** | `enable` | Enable authentication for proxy & dashboard | `false` |
+| | `user` | Username for **Dashboard** (Basic Auth) | `admin` |
+| | `password` | Password for **Dashboard** (Basic Auth) | - |
+| | `token` | Token for **API Requests** (Bearer Auth) | - |
 | **Providers** | `base_url` | Upstream endpoint (Required) | - |
+
 | | `api_key` | Upstream key (Supports env) | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |

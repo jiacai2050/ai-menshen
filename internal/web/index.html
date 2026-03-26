@@ -191,6 +191,7 @@
                 chart: null,
                 init() {
                     this.fetchOverview();
+                    if (this.tab === 'logs') this.fetchLogs();
                 },
                 fetchOverview() {
                     const params = '?days=' + this.days;
@@ -207,6 +208,7 @@
                 showDetail(id) {
                     fetch('/__report/log?id=' + id).then(res => res.json()).then(data => {
                         this.selectedLog = data;
+                        document.getElementById('log-modal').showModal();
                     });
                 },
                 renderChart() {

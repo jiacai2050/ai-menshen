@@ -45,31 +45,45 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Optional auth check for all routes (Proxy, Dashboard, Reports, Assets)
+	if g.cfg.Auth.Enable {
+		isUI := r.URL.Path == "/" ||
+			strings.HasPrefix(r.URL.Path, "/__report/") ||
+			strings.HasPrefix(r.URL.Path, "/assets/")
+
+		if isUI {
+			// Browser-friendly Basic Auth for UI and Assets
+			user, pass, ok := r.BasicAuth()
+			if !ok || user != g.cfg.Auth.User || pass != g.cfg.Auth.Password {
+				w.Header().Set("WWW-Authenticate", `Basic realm="ai-menshen"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			// OpenAI-compatible Bearer Token for API
+			authHeader := r.Header.Get(authHeaderName)
+			expected := "Bearer " + g.cfg.Auth.Token
+			if authHeader != expected {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+	}
+
 	if r.Method == http.MethodGet {
-		switch r.URL.Path {
-		case "/":
+		if r.URL.Path == "/" {
 			g.handleDashboard(w)
 			return
-		case "/assets/pico.min.css", "/assets/alpine.min.js", "/assets/chart.min.js":
+		}
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			g.handleAssets(w, r)
 			return
+		}
+
+		switch r.URL.Path {
 		case reportModelsPath:
 			g.handleModelReport(w, r)
 			return
-		case reportSummaryPath:
-			g.handleSummaryReport(w, r)
-			return
-		case reportDailyPath:
-			g.handleDailyReport(w, r)
-			return
-		case reportLogsPath:
-			g.handleLogsReport(w, r)
-			return
-		case reportLogDetailPath:
-			g.handleLogDetailReport(w, r)
-			return
-		}
-	}
 
 	startedAt := time.Now()
 

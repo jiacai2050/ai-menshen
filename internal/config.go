@@ -15,10 +15,18 @@ import (
 type Config struct {
 	Listen    string           `toml:"listen"`
 	Verbose   bool             `toml:"verbose"`
+	Auth      AuthConfig       `toml:"auth"`
 	Providers []ProviderConfig `toml:"providers"`
 	Storage   StorageConfig    `toml:"storage"`
 	Cache     CacheConfig      `toml:"cache"`
 	Logging   LoggingConfig    `toml:"logging"`
+}
+
+type AuthConfig struct {
+	Enable   bool   `toml:"enable"`
+	User     string `toml:"user"`
+	Password string `toml:"password"`
+	Token    string `toml:"token"`
 }
 
 type ProviderConfig struct {
