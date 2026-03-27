@@ -31,6 +31,8 @@ path = "./data/menshen.db"
 enable = true
 # Skip caching responses larger than this size (bytes)
 max_body_bytes = 5242880
+# Cache TTL in seconds (0 = never expire)
+# max_age = 0
 
 [logging]
 # Persist full request body in DB (disable to save disk / for privacy)

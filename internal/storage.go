@@ -242,7 +242,7 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 	return nil
 }
 
-func (s *Storage) FindCachedResponse(cacheKey string, maxBodyBytes int64) (*CachedResponse, error) {
+func (s *Storage) FindCachedResponse(cacheKey string, maxBodyBytes int64, maxAge int64) (*CachedResponse, error) {
 	if cacheKey == "" {
 		return nil, nil
 	}
@@ -261,6 +261,10 @@ func (s *Storage) FindCachedResponse(cacheKey string, maxBodyBytes int64) (*Cach
 	if maxBodyBytes > 0 {
 		query += ` AND LENGTH(rb.content) <= ?`
 		args = append(args, maxBodyBytes)
+	}
+	if maxAge > 0 {
+		query += ` AND rl.created_at >= ?`
+		args = append(args, time.Now().UnixMilli()-maxAge*1000)
 	}
 
 	query += ` ORDER BY rl.created_at DESC LIMIT 1`

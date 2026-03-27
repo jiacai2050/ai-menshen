@@ -137,7 +137,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if canUseCache(r, meta, g.cfg.Cache) {
-		cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxBodyBytes)
+		cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxBodyBytes, g.cfg.Cache.MaxAge)
 		if err != nil {
 			log.Printf("cache lookup failed: %v", err)
 		}

@@ -155,5 +155,6 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
 | **Cache** | `enable` | Cache non-stream 200 responses | `true` |
 | | `max_body_bytes` | Skip caching responses larger than this size | `5242880` (5 MiB) |
+| | `max_age` | Cache TTL in seconds (0 = never expire) | `0` |
 | **Logging** | `log_request_body` | Persist full request body in DB | `true` |
 | | `log_response_body` | Persist full response body in DB (required for cache) | `true` |

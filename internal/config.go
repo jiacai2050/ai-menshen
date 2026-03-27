@@ -53,6 +53,7 @@ type StorageConfig struct {
 type CacheConfig struct {
 	Enable       bool  `toml:"enable"`
 	MaxBodyBytes int64 `toml:"max_body_bytes"`
+	MaxAge       int64 `toml:"max_age"`
 }
 
 type LoggingConfig struct {
