@@ -14,11 +14,11 @@ import (
 )
 
 type Storage struct {
-	db     *sql.DB
-	queue  chan exchangeTask
-	closed chan struct{}
+	db       *sql.DB
+	queue    chan exchangeTask
+	closed   chan struct{}
 	stopping atomic.Bool
-	wg     sync.WaitGroup
+	wg       sync.WaitGroup
 }
 
 type exchangeTask struct {
