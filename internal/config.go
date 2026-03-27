@@ -13,13 +13,14 @@ import (
 )
 
 type Config struct {
-	Listen    string           `toml:"listen"`
-	Verbose   bool             `toml:"verbose"`
-	Auth      AuthConfig       `toml:"auth"`
-	Providers []ProviderConfig `toml:"providers"`
-	Storage   StorageConfig    `toml:"storage"`
-	Cache     CacheConfig      `toml:"cache"`
-	Logging   LoggingConfig    `toml:"logging"`
+	Listen     string           `toml:"listen"`
+	Verbose    bool             `toml:"verbose"`
+	Auth       AuthConfig       `toml:"auth"`
+	Providers  []ProviderConfig `toml:"providers"`
+	HTTPClient HTTPClientConfig `toml:"http_client"`
+	Storage    StorageConfig    `toml:"storage"`
+	Cache      CacheConfig      `toml:"cache"`
+	Logging    LoggingConfig    `toml:"logging"`
 }
 
 type AuthConfig struct {
@@ -36,9 +37,17 @@ type ProviderConfig struct {
 	Model   string            `toml:"model"`
 }
 
+type HTTPClientConfig struct {
+	Timeout int `toml:"timeout"`
+}
+
+type SQLiteConfig struct {
+	Path string `toml:"path"`
+}
+
 type StorageConfig struct {
-	SQLitePath    string `toml:"sqlite_path"`
-	RetentionDays int    `toml:"retention_days"`
+	RetentionDays int          `toml:"retention_days"`
+	SQLite        SQLiteConfig `toml:"sqlite"`
 }
 
 type CacheConfig struct {
@@ -87,12 +96,18 @@ func ParseCLI(args []string, output io.Writer) (CLIOptions, error) {
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{
 		Listen: ":8080",
+		HTTPClient: HTTPClientConfig{
+			Timeout: 300,
+		},
 		Storage: StorageConfig{
-			SQLitePath:    "./data/ai-menshen.db",
+			SQLite: SQLiteConfig{
+				Path: "./data/ai-menshen.db",
+			},
 			RetentionDays: 90,
 		},
 		Cache: CacheConfig{
-			MaxBodyBytes: 1 << 20,
+			Enable:       true,
+			MaxBodyBytes: 5 << 20,
 		},
 		Logging: LoggingConfig{
 			LogRequestBody:  true,
@@ -124,6 +139,10 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 
+	if cfg.HTTPClient.Timeout < 0 {
+		return cfg, fmt.Errorf("config.http_client.timeout must not be negative")
+	}
+
 	if len(cfg.Providers) == 0 {
 		return cfg, fmt.Errorf("config.providers must contain at least one provider")
 	}
@@ -149,6 +168,8 @@ func LoadConfig(path string) (Config, error) {
 
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
 	}
+
+	cfg.Storage.SQLite.Path = os.ExpandEnv(cfg.Storage.SQLite.Path)
 
 	return cfg, nil
 }
