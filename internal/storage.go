@@ -3,7 +3,6 @@ package aimenshen
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -72,14 +71,14 @@ func (s *Storage) retentionWorker(days int) {
 	defer ticker.Stop()
 	// Initial cleanup on start
 	if err := s.Cleanup(days); err != nil {
-		log.Printf("initial storage cleanup error: %v", err)
+		logError("initial storage cleanup error: %v", err)
 	}
 
 	for {
 		select {
 		case <-ticker.C:
 			if err := s.Cleanup(days); err != nil {
-				log.Printf("periodic storage cleanup error: %v", err)
+				logError("periodic storage cleanup error: %v", err)
 			}
 		case <-s.closed:
 			return
@@ -104,7 +103,7 @@ func (s *Storage) Cleanup(days int) error {
 	}
 
 	if rows > 0 {
-		log.Printf("Storage cleanup: deleted %d expired log entries older than %d days", rows, days)
+		logInfo("Storage cleanup: deleted %d expired log entries older than %d days", rows, days)
 	}
 	return nil
 }

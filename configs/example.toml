@@ -5,17 +5,17 @@ verbose = false
 enable = false
 # Used for browser-based Dashboard access (User:Password)
 user = "admin"
-password = "your-password-here"
+password = "your-password-here"  # supports ${ENV}
 # Used for API proxying (Authorization: Bearer <token>)
-token = "sk-your-proxy-token"
+token = "sk-your-proxy-token"  # supports ${ENV}
 
 [[providers]]
 base_url = "https://api.openai.com/v1"
-api_key = "${OPENAI_API_KEY}"
+api_key = "${OPENAI_API_KEY}"  # supports ${ENV}
 # Optional: override the client's model before forwarding upstream.
 # model = "gpt-4.1"
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
-# headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
+# headers = { "cf-aig-authorization" = "Bearer ${CLOUDFLARE_API_KEY}" }  # values support ${ENV}
 
 [http_client]
 # Upstream request timeout in seconds (default: 300)
@@ -25,7 +25,7 @@ api_key = "${OPENAI_API_KEY}"
 retention_days = 90
 
 [storage.sqlite]
-path = "./data/menshen.db"
+path = "./data/menshen.db"  # supports ${ENV}
 
 [cache]
 enable = true

@@ -56,13 +56,13 @@ curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.
 The script supports custom version and installation directory:
 ```bash
 # Pass arguments using sh -s --
-curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.sh | sh -s -- --version v1.0.0 --install-dir /usr/local/bin
+curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.sh | sh -s -- --version v1.0.0 --prefix /usr/local/bin
 ```
 
 | Option | Description | Default |
 | :--- | :--- | :--- |
 | `--version`, `-v` | Release version to install | `latest` |
-| `--install-dir`, `-d` | Directory to install binary | `~/.local/bin` |
+| `--prefix`, `-p` | Directory to install binary | `~/.local/bin` |
 
 ### Via Go Install
 
@@ -89,8 +89,8 @@ make build
 2.  **Setup config**:
     ```bash
     mkdir -p ~/.config/ai-menshen
-    # Download the example config
-    curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/configs/example.toml -o ~/.config/ai-menshen/config.toml
+    # Generate the default config
+    ai-menshen -gen-config > ~/.config/ai-menshen/config.toml
     # Edit with your upstream API key
     vi ~/.config/ai-menshen/config.toml
     ```
@@ -105,7 +105,7 @@ make build
 
     **REST API**:
     ```bash
-    # Match [auth].token if auth.enable = true (can be anything if false)
+    # `your-auth-token` should match [auth].token if auth.enable = true (can be anything if false)
     curl http://localhost:8080/chat/completions \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer your-auth-token" \

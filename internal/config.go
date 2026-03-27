@@ -64,6 +64,7 @@ type LoggingConfig struct {
 type CLIOptions struct {
 	ConfigPath string
 	Version    bool
+	GenConfig  bool
 }
 
 func ParseCLI(args []string, output io.Writer) (CLIOptions, error) {
@@ -73,15 +74,7 @@ func ParseCLI(args []string, output io.Writer) (CLIOptions, error) {
 	flagSet.SetOutput(output)
 	flagSet.StringVar(&options.ConfigPath, "config", options.ConfigPath, "path to TOML config file")
 	flagSet.BoolVar(&options.Version, "version", false, "print version information")
-	flagSet.Usage = func() {
-		fmt.Fprintf(flagSet.Output(), "Usage: %s [-config path] [-version]\n\n", filepath.Base(args[0]))
-		fmt.Fprintln(flagSet.Output(), "Run the OpenAI-compatible gateway with a TOML config file.")
-		fmt.Fprintln(flagSet.Output())
-		fmt.Fprintln(flagSet.Output(), "Flags:")
-		flagSet.PrintDefaults()
-		fmt.Fprintln(flagSet.Output())
-		fmt.Fprintf(flagSet.Output(), "Examples:\n  %s\n  %s -config ./config.toml\n  %s -version\n", filepath.Base(args[0]), filepath.Base(args[0]), filepath.Base(args[0]))
-	}
+	flagSet.BoolVar(&options.GenConfig, "gen-config", false, "print default config to stdout")
 
 	if err := flagSet.Parse(args[1:]); err != nil {
 		return options, err

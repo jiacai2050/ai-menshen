@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,9 @@ import (
 
 	aimenshen "github.com/jiacai2050/ai-menshen/internal"
 )
+
+//go:embed configs/example.toml
+var defaultConfig []byte
 
 var (
 	Version = "dev"
@@ -41,6 +45,11 @@ func main() {
 				}
 			}
 		}
+		return
+	}
+
+	if cli.GenConfig {
+		os.Stdout.Write(defaultConfig)
 		return
 	}
 

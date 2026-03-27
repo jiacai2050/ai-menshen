@@ -15,7 +15,7 @@ usage() {
     echo "Usage: $0 [options]"
     echo "Options:"
     echo "  -v, --version <ver>      Release version (e.g. v1.0.0), default is latest"
-    echo "  -d, --install-dir <dir>  Directory to install binary, default is ~/.local/bin"
+    echo "  -p, --prefix <dir>       Directory to install binary, default is ~/.local/bin"
     echo "  -h, --help               Show this help message"
     exit 1
 }
@@ -32,12 +32,12 @@ while [ "$#" -gt 0 ]; do
                 usage
             fi
             ;;
-        --install-dir|-d)
+        --prefix|-p)
             if [ -n "$2" ]; then
                 INSTALL_DIR="$2"
                 shift 2
             else
-                echo "Error: --install-dir requires an argument"
+                echo "Error: --prefix requires an argument"
                 usage
             fi
             ;;
