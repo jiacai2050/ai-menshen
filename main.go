@@ -64,7 +64,7 @@ func run(configPath string) error {
 		if err := storage.Close(); err != nil {
 			log.Printf("Storage: close failed, err: %v", err)
 		} else {
-			log.Println("Storage closed success")
+			log.Println("Storage closed successfully")
 		}
 	}()
 

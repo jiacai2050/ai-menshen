@@ -169,7 +169,11 @@ func LoadConfig(path string) (Config, error) {
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
 	}
 
-	cfg.Storage.SQLite.Path = os.ExpandEnv(cfg.Storage.SQLite.Path)
+	expandedSQLitePath := strings.TrimSpace(os.ExpandEnv(cfg.Storage.SQLite.Path))
+	if expandedSQLitePath == "" {
+		return cfg, fmt.Errorf("config.storage.sqlite.path is required")
+	}
+	cfg.Storage.SQLite.Path = expandedSQLitePath
 
 	return cfg, nil
 }

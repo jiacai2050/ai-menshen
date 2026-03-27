@@ -137,7 +137,7 @@ make build
 
 ## Configuration Guide
 
-Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key`, `password`, `token`, `headers` and `sqlite.path` values support **Environment Variables** (e.g., `${KEY}`).
+Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key`, `password`, `token`, `headers` and `storage.sqlite.path` values support **Environment Variables** (e.g., `${KEY}`).
 
 | Section | Field | Description | Default |
 | :--- | :--- | :--- | :--- |
