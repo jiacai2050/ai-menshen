@@ -34,11 +34,13 @@ type Gateway struct {
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
+	provider := cfg.PrimaryProvider()
+	timeout := time.Duration(cfg.HTTPClient.Timeout) * time.Second
 	service := &Gateway{
 		cfg:      cfg,
-		provider: cfg.PrimaryProvider(),
+		provider: provider,
 		storage:  storage,
-		client:   &http.Client{Transport: http.DefaultTransport},
+		client:   &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
 	}
 
 	return service, nil

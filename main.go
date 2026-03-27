@@ -44,24 +44,33 @@ func main() {
 		return
 	}
 
-	cfg, err := aimenshen.LoadConfig(cli.ConfigPath)
-	if err != nil {
+	if err := run(cli.ConfigPath); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func run(configPath string) error {
+	cfg, err := aimenshen.LoadConfig(configPath)
+	if err != nil {
+		return err
 	}
 
 	storage, err := aimenshen.OpenStorage(cfg.Storage)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer func() {
+		log.Printf("Storage: closing workers and queue...")
 		if err := storage.Close(); err != nil {
-			log.Printf("Close storage failed, err: %v", err)
+			log.Printf("Storage: close failed, err: %v", err)
+		} else {
+			log.Println("Storage closed successfully")
 		}
 	}()
 
 	handler, err := aimenshen.NewGateway(cfg, storage)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	provider := cfg.PrimaryProvider()
@@ -75,51 +84,26 @@ func main() {
 		Handler: handler,
 	}
 
-	// Server run context
-	serverCtx, serverStopCtx := context.WithCancel(context.Background())
-	// Listen for syscall signals for process to interrupt/quit
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-	shutdownErr := make(chan error, 1)
 
+	listenErr := make(chan error, 1)
 	go func() {
-		<-sig
-
-		// Shutdown signal with grace period
-		shutdownCtx, cancel := context.WithTimeout(serverCtx, 10*time.Second)
-		defer cancel()
-
-		go func() {
-			<-shutdownCtx.Done()
-			if shutdownCtx.Err() == context.DeadlineExceeded {
-				log.Printf("graceful shutdown timed out.. forcing exit.")
-				serverStopCtx()
-			}
-		}()
-
-		// Trigger graceful shutdown
-		err := server.Shutdown(shutdownCtx)
-		if err != nil {
-			shutdownErr <- err
-		}
-		serverStopCtx()
+		listenErr <- server.ListenAndServe()
 	}()
 
-	// Run the server
-	err = server.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
-	}
-
-	// Wait for server context to be stopped
-	<-serverCtx.Done()
-
 	select {
-	case err := <-shutdownErr:
-		log.Printf("server shutdown error: %v", err)
-	default:
+	case <-sig:
+		log.Println("Shutting down...")
+	case err := <-listenErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("server listen: %w", err)
+		}
+		return nil
 	}
 
-	log.Printf("Shutting down storage...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
+	return server.Shutdown(shutdownCtx)
 }

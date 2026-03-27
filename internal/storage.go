@@ -7,16 +7,18 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type Storage struct {
-	db     *sql.DB
-	queue  chan exchangeTask
-	closed chan struct{}
-	wg     sync.WaitGroup
+	db       *sql.DB
+	queue    chan exchangeTask
+	closed   chan struct{}
+	stopping atomic.Bool
+	wg       sync.WaitGroup
 }
 
 type exchangeTask struct {
@@ -26,7 +28,7 @@ type exchangeTask struct {
 }
 
 func OpenStorage(cfg StorageConfig) (*Storage, error) {
-	path := cfg.SQLitePath
+	path := cfg.SQLite.Path
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
 	}
@@ -158,6 +160,9 @@ func (s *Storage) init() error {
 }
 
 func (s *Storage) SaveExchange(request RequestLog, response ResponseLog, usage *UsageLog) error {
+	if s.stopping.Load() {
+		return fmt.Errorf("storage closed, dropping log for %s", request.ID)
+	}
 	select {
 	case s.queue <- exchangeTask{request, response, usage}:
 		return nil
@@ -441,7 +446,7 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 }
 
 func (s *Storage) Close() error {
-	log.Printf("Storage: closing workers and queue...")
+	s.stopping.Store(true)
 	close(s.closed)
 	close(s.queue)
 	s.wg.Wait()

@@ -137,7 +137,7 @@ make build
 
 ## Configuration Guide
 
-Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key`, `password`, `token` and `headers` values support **Environment Variables** (e.g., `${KEY}`).
+Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key`, `password`, `token`, `headers` and `storage.sqlite.path` values support **Environment Variables** (e.g., `${KEY}`).
 
 | Section | Field | Description | Default |
 | :--- | :--- | :--- | :--- |
@@ -150,7 +150,10 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `api_key` | Upstream key | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |
-| **Storage** | `sqlite_path` | SQLite database location | `./data/ai-menshen.db` |
-| | `retention_days` | Automatically purge logs older than X days | `90` |
+| **HTTPClient** | `timeout` | Upstream request timeout (seconds) | `300` (5 min) |
+| **Storage** | `retention_days` | Automatically purge logs older than X days | `90` |
+| **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
 | **Cache** | `enable` | Cache non-stream 200 responses | `true` |
-| **Logging** | `log_request_body` | Persist full requests in DB | `true` |
+| | `max_body_bytes` | Skip caching responses larger than this size | `5242880` (5 MiB) |
+| **Logging** | `log_request_body` | Persist full request body in DB | `true` |
+| | `log_response_body` | Persist full response body in DB (required for cache) | `true` |

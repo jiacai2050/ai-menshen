@@ -17,14 +17,23 @@ api_key = "${OPENAI_API_KEY}"
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
 # headers = { "cf-aig-authorization" = "Bearer ${DEEPSEEK_API_KEY}" }
 
+[http_client]
+# Upstream request timeout in seconds (default: 300)
+# timeout = 300
+
 [storage]
-sqlite_path = "./data/menshen.db"
 retention_days = 90
+
+[storage.sqlite]
+path = "./data/menshen.db"
 
 [cache]
 enable = true
-max_body_bytes = 1048576
+# Skip caching responses larger than this size (bytes)
+max_body_bytes = 5242880
 
 [logging]
-log_request_body = true
-log_response_body = true
+# Persist full request body in DB (disable to save disk / for privacy)
+# log_request_body = true
+# Persist full response body in DB (also required for cache hits to return body)
+# log_response_body = true
