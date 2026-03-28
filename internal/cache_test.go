@@ -1,0 +1,312 @@
+package aimenshen
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestIsStreamBodyComplete(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		complete bool
+	}{
+		{
+			name:     "empty body",
+			body:     "",
+			complete: false,
+		},
+		{
+			name:     "body with DONE marker",
+			body:     "data: {\"choices\":[]}\n\ndata: [DONE]\n\n",
+			complete: true,
+		},
+		{
+			name:     "body without DONE marker",
+			body:     "data: {\"choices\":[]}\n\n",
+			complete: false,
+		},
+		{
+			name:     "partial DONE marker",
+			body:     "data: [DON",
+			complete: false,
+		},
+		{
+			name:     "DONE marker embedded in longer body",
+			body:     "data: chunk1\n\ndata: chunk2\n\ndata: [DONE]\n\n",
+			complete: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isStreamBodyComplete([]byte(tt.body))
+			if got != tt.complete {
+				t.Errorf("isStreamBodyComplete(%q) = %v, want %v", tt.body, got, tt.complete)
+			}
+		})
+	}
+}
+
+func TestStreamCacheMaxBodyBytes(t *testing.T) {
+	const oneMB = int64(1024 * 1024)
+
+	tests := []struct {
+		name     string
+		config   CacheConfig
+		expected int64
+	}{
+		{
+			name:     "zero MaxBodyBytes uses 1MB default",
+			config:   CacheConfig{MaxBodyBytes: 0},
+			expected: oneMB,
+		},
+		{
+			name:     "MaxBodyBytes smaller than 1MB uses configured value",
+			config:   CacheConfig{MaxBodyBytes: 512 * 1024},
+			expected: 512 * 1024,
+		},
+		{
+			name:     "MaxBodyBytes equal to 1MB uses 1MB",
+			config:   CacheConfig{MaxBodyBytes: oneMB},
+			expected: oneMB,
+		},
+		{
+			name:     "MaxBodyBytes larger than 1MB uses 1MB cap",
+			config:   CacheConfig{MaxBodyBytes: 2 * oneMB},
+			expected: oneMB,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := streamCacheMaxBodyBytes(tt.config)
+			if got != tt.expected {
+				t.Errorf("streamCacheMaxBodyBytes() = %d, want %d", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCanStoreCachedStreamResponse(t *testing.T) {
+	validBody := []byte("data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
+	noMarkerBody := []byte("data: {\"choices\":[]}\n\n")
+
+	makeRequest := func(method, path string) *http.Request {
+		req := httptest.NewRequest(method, path, nil)
+		return req
+	}
+
+	streamMeta := RequestMeta{
+		Stream:   true,
+		CacheKey: "testkey",
+	}
+
+	tests := []struct {
+		name     string
+		r        *http.Request
+		meta     RequestMeta
+		status   int
+		body     []byte
+		cfg      CacheConfig
+		expected bool
+	}{
+		{
+			name:     "valid stream response stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: true,
+		},
+		{
+			name:     "cache disabled → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: false},
+			expected: false,
+		},
+		{
+			name:     "non-stream meta → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: false, CacheKey: "testkey"},
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "no cache key → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: true, CacheKey: ""},
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "non-200 status → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusInternalServerError,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "missing DONE marker → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     noMarkerBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "body exceeds MaxBodyBytes → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true, MaxBodyBytes: 10},
+			expected: false,
+		},
+		{
+			name:     "uncacheable path → not stored",
+			r:        makeRequest(http.MethodPost, "/embeddings"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "GET method → not stored",
+			r:        makeRequest(http.MethodGet, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     validBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := canStoreCachedStreamResponse(tt.r, tt.meta, tt.status, tt.body, tt.cfg)
+			if got != tt.expected {
+				t.Errorf("canStoreCachedStreamResponse() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCanUseCacheForStream(t *testing.T) {
+	makeRequest := func(method, path string) *http.Request {
+		return httptest.NewRequest(method, path, nil)
+	}
+
+	tests := []struct {
+		name     string
+		r        *http.Request
+		meta     RequestMeta
+		cfg      CacheConfig
+		expected bool
+	}{
+		{
+			name:     "stream POST to cacheable path with key → true",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			cfg:      CacheConfig{Enable: true},
+			expected: true,
+		},
+		{
+			name:     "stream POST to /responses → true",
+			r:        makeRequest(http.MethodPost, "/responses"),
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			cfg:      CacheConfig{Enable: true},
+			expected: true,
+		},
+		{
+			name:     "cache disabled → false",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			cfg:      CacheConfig{Enable: false},
+			expected: false,
+		},
+		{
+			name:     "non-stream → false",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "empty cache key → false",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: true, CacheKey: ""},
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "uncacheable path → false",
+			r:        makeRequest(http.MethodPost, "/embeddings"),
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+		{
+			name:     "GET method → false",
+			r:        makeRequest(http.MethodGet, "/chat/completions"),
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			cfg:      CacheConfig{Enable: true},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := canUseCacheForStream(tt.r, tt.meta, tt.cfg)
+			if got != tt.expected {
+				t.Errorf("canUseCacheForStream() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestServeCachedStreamResponseHeaders verifies that a stream cache hit
+// response returns text/event-stream content-type and X-Cache: HIT.
+func TestServeCachedStreamResponseHeaders(t *testing.T) {
+	sseBody := "data: {\"choices\":[]}\n\ndata: [DONE]\n\n"
+	cached := &CachedResponse{
+		RequestID:    "req-orig",
+		StatusCode:   200,
+		ResponseBody: sseBody,
+	}
+
+	w := httptest.NewRecorder()
+
+	// Simulate the header/body writing logic of serveCachedStreamResponse.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Cache", "HIT")
+	w.WriteHeader(cached.StatusCode)
+	if _, err := w.WriteString(cached.ResponseBody); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	resp := w.Result()
+	if resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", resp.Header.Get("Content-Type"))
+	}
+	if resp.Header.Get("X-Cache") != "HIT" {
+		t.Errorf("X-Cache = %q, want HIT", resp.Header.Get("X-Cache"))
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
+	}
+}

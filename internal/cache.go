@@ -1,10 +1,28 @@
 package aimenshen
 
-import "net/http"
+import (
+	"bytes"
+	"net/http"
+)
 
 var cacheablePaths = map[string]struct{}{
 	"/chat/completions": {},
 	"/responses":        {},
+}
+
+// sseDoneMarker is the OpenAI-style end-of-stream marker for SSE responses.
+var sseDoneMarker = []byte("data: [DONE]")
+
+// streamCacheMaxBodyBytes returns the effective byte limit for caching stream
+// responses. The hard cap is 1 MB (matching the capture buffer limit). If
+// MaxBodyBytes is configured and smaller than 1 MB, that value takes
+// precedence.
+func streamCacheMaxBodyBytes(cacheConfig CacheConfig) int64 {
+	const defaultStreamLimit = 1024 * 1024 // 1 MB
+	if cacheConfig.MaxBodyBytes > 0 && cacheConfig.MaxBodyBytes < defaultStreamLimit {
+		return cacheConfig.MaxBodyBytes
+	}
+	return defaultStreamLimit
 }
 
 func canUseCache(r *http.Request, meta RequestMeta, cacheConfig CacheConfig) bool {
@@ -20,6 +38,27 @@ func canUseCache(r *http.Request, meta RequestMeta, cacheConfig CacheConfig) boo
 	return true
 }
 
+// canUseCacheForStream returns true when a streaming request is eligible for
+// cache lookup or storage (same conditions as canUseCache but for stream=true).
+func canUseCacheForStream(r *http.Request, meta RequestMeta, cacheConfig CacheConfig) bool {
+	if !cacheConfig.Enable || !meta.Stream || meta.CacheKey == "" {
+		return false
+	}
+	if r.Method != http.MethodPost {
+		return false
+	}
+	if _, ok := cacheablePaths[r.URL.Path]; !ok {
+		return false
+	}
+	return true
+}
+
+// isStreamBodyComplete reports whether a captured SSE body contains the
+// OpenAI end-of-stream marker "data: [DONE]", indicating a complete response.
+func isStreamBodyComplete(body []byte) bool {
+	return bytes.Contains(body, sseDoneMarker)
+}
+
 func canStoreCachedResponse(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte, cacheConfig CacheConfig) bool {
 	if !canUseCache(r, meta, cacheConfig) {
 		return false
@@ -28,6 +67,25 @@ func canStoreCachedResponse(r *http.Request, meta RequestMeta, statusCode int, r
 		return false
 	}
 	if cacheConfig.MaxBodyBytes > 0 && int64(len(responseBody)) > cacheConfig.MaxBodyBytes {
+		return false
+	}
+	return true
+}
+
+// canStoreCachedStreamResponse returns true when a captured stream body should
+// be written to the cache. Requirements: eligible path, status 200, body
+// contains the SSE done marker, and body size is within the configured limit.
+func canStoreCachedStreamResponse(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte, cacheConfig CacheConfig) bool {
+	if !canUseCacheForStream(r, meta, cacheConfig) {
+		return false
+	}
+	if statusCode != http.StatusOK {
+		return false
+	}
+	if !isStreamBodyComplete(responseBody) {
+		return false
+	}
+	if int64(len(responseBody)) > streamCacheMaxBodyBytes(cacheConfig) {
 		return false
 	}
 	return true
