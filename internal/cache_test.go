@@ -49,46 +49,6 @@ func TestIsStreamBodyComplete(t *testing.T) {
 	}
 }
 
-func TestStreamCacheMaxBodyBytes(t *testing.T) {
-	const oneMB = int64(1024 * 1024)
-
-	tests := []struct {
-		name     string
-		config   CacheConfig
-		expected int64
-	}{
-		{
-			name:     "zero MaxBodyBytes uses 1MB default",
-			config:   CacheConfig{MaxBodyBytes: 0},
-			expected: oneMB,
-		},
-		{
-			name:     "MaxBodyBytes smaller than 1MB uses configured value",
-			config:   CacheConfig{MaxBodyBytes: 512 * 1024},
-			expected: 512 * 1024,
-		},
-		{
-			name:     "MaxBodyBytes equal to 1MB uses 1MB",
-			config:   CacheConfig{MaxBodyBytes: oneMB},
-			expected: oneMB,
-		},
-		{
-			name:     "MaxBodyBytes larger than 1MB uses 1MB cap",
-			config:   CacheConfig{MaxBodyBytes: 2 * oneMB},
-			expected: oneMB,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := streamCacheMaxBodyBytes(tt.config)
-			if got != tt.expected {
-				t.Errorf("streamCacheMaxBodyBytes() = %d, want %d", got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestCanStoreCachedStreamResponse(t *testing.T) {
 	validBody := []byte("data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
 	noMarkerBody := []byte("data: {\"choices\":[]}\n\n")
@@ -174,6 +134,15 @@ func TestCanStoreCachedStreamResponse(t *testing.T) {
 			body:     validBody,
 			cfg:      CacheConfig{Enable: true, MaxBodyBytes: 10},
 			expected: false,
+		},
+		{
+			name:     "large body with no MaxBodyBytes limit → stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     streamMeta,
+			status:   http.StatusOK,
+			body:     append(make([]byte, 2*1024*1024), []byte("data: [DONE]\n\n")...),
+			cfg:      CacheConfig{Enable: true, MaxBodyBytes: 0},
+			expected: true,
 		},
 		{
 			name:     "uncacheable path → not stored",

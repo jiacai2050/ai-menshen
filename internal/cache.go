@@ -13,18 +13,6 @@ var cacheablePaths = map[string]struct{}{
 // sseDoneMarker is the OpenAI-style end-of-stream marker for SSE responses.
 var sseDoneMarker = []byte("data: [DONE]")
 
-// streamCacheMaxBodyBytes returns the effective byte limit for caching stream
-// responses. The hard cap is 1 MB (matching the capture buffer limit). If
-// MaxBodyBytes is configured and smaller than 1 MB, that value takes
-// precedence.
-func streamCacheMaxBodyBytes(cacheConfig CacheConfig) int64 {
-	const defaultStreamLimit = 1024 * 1024 // 1 MB
-	if cacheConfig.MaxBodyBytes > 0 && cacheConfig.MaxBodyBytes < defaultStreamLimit {
-		return cacheConfig.MaxBodyBytes
-	}
-	return defaultStreamLimit
-}
-
 func canUseCache(r *http.Request, meta RequestMeta, cacheConfig CacheConfig) bool {
 	if !cacheConfig.Enable || meta.Stream || meta.CacheKey == "" {
 		return false
@@ -85,7 +73,7 @@ func canStoreCachedStreamResponse(r *http.Request, meta RequestMeta, statusCode 
 	if !isStreamBodyComplete(responseBody) {
 		return false
 	}
-	if int64(len(responseBody)) > streamCacheMaxBodyBytes(cacheConfig) {
+	if cacheConfig.MaxBodyBytes > 0 && int64(len(responseBody)) > cacheConfig.MaxBodyBytes {
 		return false
 	}
 	return true

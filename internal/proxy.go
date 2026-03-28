@@ -132,7 +132,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if meta.Stream {
 		if canUseCacheForStream(r, meta, g.cfg.Cache) {
-			cached, err := g.storage.FindCachedResponse(meta.CacheKey, streamCacheMaxBodyBytes(g.cfg.Cache), g.cfg.Cache.MaxAge)
+			cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxBodyBytes, g.cfg.Cache.MaxAge)
 			if err != nil {
 				logError("stream cache lookup failed: %v", err)
 			}
