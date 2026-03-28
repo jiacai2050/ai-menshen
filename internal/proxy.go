@@ -34,7 +34,7 @@ type Gateway struct {
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 	provider := cfg.PrimaryProvider()
-	timeout := time.Duration(cfg.HTTPClient.Timeout) * time.Second
+	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	service := &Gateway{
 		cfg:      cfg,
 		provider: provider,

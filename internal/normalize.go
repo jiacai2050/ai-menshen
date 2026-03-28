@@ -52,6 +52,15 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 		meta.Stream = stream
 	}
 
+	if meta.Stream {
+		if _, exists := payload["stream_options"]; !exists {
+			payload["stream_options"] = map[string]any{
+				"include_usage": true,
+			}
+			needsMarshal = true
+		}
+	}
+
 	if needsMarshal {
 		effectiveBody, err := json.Marshal(payload)
 		if err != nil {

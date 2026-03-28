@@ -1,6 +1,8 @@
 package aimenshen
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -71,4 +73,109 @@ func TestBuildCacheKeyExplicit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAnalyzeRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		body     []byte
+		provider ProviderConfig
+		expected RequestMeta
+	}{
+		{
+			name: "empty body",
+			path: "/v1/chat/completions",
+			expected: RequestMeta{
+				EffectiveBody: nil,
+			},
+		},
+		{
+			name:     "non-json passthrough",
+			path:     "/v1/chat/completions",
+			body:     []byte("not json"),
+			provider: ProviderConfig{Model: "gpt-4.1"},
+			expected: RequestMeta{
+				EffectiveBody: []byte("not json"),
+			},
+		},
+		{
+			name:     "provider model override builds cache key",
+			path:     "/v1/chat/completions",
+			body:     []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`),
+			provider: ProviderConfig{Model: "gpt-4.1"},
+			expected: RequestMeta{
+				EffectiveBody:  []byte(`{"messages":[{"content":"hi","role":"user"}],"model":"gpt-4.1"}`),
+				EffectiveModel: "gpt-4.1",
+			},
+		},
+		{
+			name: "stream adds default stream options",
+			path: "/v1/chat/completions",
+			body: []byte(`{"model":"gpt-4o","messages":[],"stream":true}`),
+			expected: RequestMeta{
+				EffectiveBody:  []byte(`{"messages":[],"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true}}`),
+				EffectiveModel: "gpt-4o",
+				Stream:         true,
+			},
+		},
+		{
+			name: "stream preserves user stream options",
+			path: "/v1/chat/completions",
+			body: []byte(`{"model":"gpt-4o","messages":[],"stream":true,"stream_options":{"include_usage":false}}`),
+			expected: RequestMeta{
+				EffectiveBody:  []byte(`{"messages":[],"model":"gpt-4o","stream":true,"stream_options":{"include_usage":false}}`),
+				EffectiveModel: "gpt-4o",
+				Stream:         true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta, err := AnalyzeRequest(tt.path, tt.body, tt.provider)
+			if err != nil {
+				t.Fatalf("AnalyzeRequest() error = %v", err)
+			}
+
+			expected := tt.expected
+			if expected.CacheKey == "" && !expected.Stream && len(expected.EffectiveBody) > 0 {
+				payload, ok := decodeJSONObject(expected.EffectiveBody)
+				if ok {
+					cacheKey, err := buildCacheKey(tt.path, payload)
+					if err != nil {
+						t.Fatalf("buildCacheKey() error = %v", err)
+					}
+					expected.CacheKey = cacheKey
+				}
+			}
+
+			meta.EffectiveBody = canonicalBody(t, meta.EffectiveBody)
+			expected.EffectiveBody = canonicalBody(t, expected.EffectiveBody)
+
+			if !reflect.DeepEqual(meta, expected) {
+				t.Fatalf("AnalyzeRequest() = %#v, want %#v", meta, expected)
+			}
+		})
+	}
+}
+
+func canonicalBody(t *testing.T, body []byte) []byte {
+	t.Helper()
+
+	if len(body) == 0 {
+		return nil
+	}
+
+	var parsed any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return body
+	}
+
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatalf("canonicalBody() error = %v", err)
+	}
+
+	return canonical
 }
