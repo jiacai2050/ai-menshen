@@ -247,35 +247,3 @@ func TestCanUseCacheForStream(t *testing.T) {
 	}
 }
 
-// TestServeCachedStreamResponseHeaders verifies that a stream cache hit
-// response returns text/event-stream content-type and X-Cache: HIT.
-func TestServeCachedStreamResponseHeaders(t *testing.T) {
-	sseBody := "data: {\"choices\":[]}\n\ndata: [DONE]\n\n"
-	cached := &CachedResponse{
-		RequestID:    "req-orig",
-		StatusCode:   200,
-		ResponseBody: sseBody,
-	}
-
-	w := httptest.NewRecorder()
-
-	// Simulate the header/body writing logic of serveCachedStreamResponse.
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Cache", "HIT")
-	w.WriteHeader(cached.StatusCode)
-	if _, err := w.WriteString(cached.ResponseBody); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-
-	resp := w.Result()
-	if resp.Header.Get("Content-Type") != "text/event-stream" {
-		t.Errorf("Content-Type = %q, want text/event-stream", resp.Header.Get("Content-Type"))
-	}
-	if resp.Header.Get("X-Cache") != "HIT" {
-		t.Errorf("X-Cache = %q, want HIT", resp.Header.Get("X-Cache"))
-	}
-	if resp.StatusCode != 200 {
-		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
-	}
-}

@@ -249,8 +249,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 				// Do not break, keep proxying the stream
 			}
 			if captured != nil {
-				// Don't capture more than 1MB to avoid memory blow-up
-				if captured.Len() < 1024*1024 {
+				if g.cfg.Cache.MaxBodyBytes == 0 || int64(captured.Len()) < g.cfg.Cache.MaxBodyBytes {
 					_, _ = captured.Write(chunk)
 				}
 			}
