@@ -13,14 +13,14 @@ import (
 )
 
 type Config struct {
-	Listen     string           `toml:"listen"`
-	Verbose    bool             `toml:"verbose"`
-	Auth       AuthConfig       `toml:"auth"`
-	Providers  []ProviderConfig `toml:"providers"`
-	HTTPClient HTTPClientConfig `toml:"http_client"`
-	Storage    StorageConfig    `toml:"storage"`
-	Cache      CacheConfig      `toml:"cache"`
-	Logging    LoggingConfig    `toml:"logging"`
+	Listen    string           `toml:"listen"`
+	Verbose   bool             `toml:"verbose"`
+	Auth      AuthConfig       `toml:"auth"`
+	Providers []ProviderConfig `toml:"providers"`
+	Upstream  UpstreamConfig   `toml:"upstream"`
+	Storage   StorageConfig    `toml:"storage"`
+	Cache     CacheConfig      `toml:"cache"`
+	Logging   LoggingConfig    `toml:"logging"`
 }
 
 type AuthConfig struct {
@@ -37,7 +37,7 @@ type ProviderConfig struct {
 	Model   string            `toml:"model"`
 }
 
-type HTTPClientConfig struct {
+type UpstreamConfig struct {
 	Timeout int `toml:"timeout"`
 }
 
@@ -90,7 +90,7 @@ func ParseCLI(args []string, output io.Writer) (CLIOptions, error) {
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{
 		Listen: ":8080",
-		HTTPClient: HTTPClientConfig{
+		Upstream: UpstreamConfig{
 			Timeout: 300,
 		},
 		Storage: StorageConfig{
@@ -133,8 +133,8 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 
-	if cfg.HTTPClient.Timeout < 0 {
-		return cfg, fmt.Errorf("config.http_client.timeout must not be negative")
+	if cfg.Upstream.Timeout < 0 {
+		return cfg, fmt.Errorf("config.upstream.timeout must not be negative")
 	}
 
 	if len(cfg.Providers) == 0 {

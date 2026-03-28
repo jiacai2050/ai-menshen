@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Breaking**: upstream timeout config section renamed from `[http_client]` to `[upstream]`
+
+### Added
+- Automatically inject `stream_options = { include_usage = true }` for stream requests when the client does not provide `stream_options`
+
 ## v1.1.0 (2026-03-27)
 
 ### Changed
