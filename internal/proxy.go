@@ -271,8 +271,8 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	}
 
 	responseBody := ""
-	if captured != nil {
-		responseBody = g.streamResponseBodyForStorage(captured.Bytes())
+	if captured != nil && g.cfg.Logging.LogResponseBody {
+		responseBody = string(captured.Bytes())
 	}
 
 	responseLog := ResponseLog{
@@ -283,20 +283,20 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	}
 	g.saveExchange(requestLog, responseLog, usageExtractor.Usage())
 
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		logError("[%s] stream response drain failed: %v", requestLog.ID, err)
-	}
-
 	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
 
 func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, startedAt time.Time, requestLog RequestLog, cached *CachedResponse) {
 	duration := time.Since(startedAt)
 
+	cachedBody := ""
+	if g.cfg.Logging.LogResponseBody {
+		cachedBody = cached.ResponseBody
+	}
 	responseLog := ResponseLog{
 		RequestID:         requestLog.ID,
 		StatusCode:        cached.StatusCode,
-		ResponseBody:      g.cachedResponseBodyForStorage(cached.ResponseBody),
+		ResponseBody:      cachedBody,
 		DurationMS:        duration.Milliseconds(),
 		FromCache:         true,
 		CacheHitRequestID: cached.RequestID,
@@ -310,7 +310,7 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 		logError("write cached response failed: %v", err)
 	}
 
-	logInfo("[%s] [%d] %s %s (%.3fs, cache hit)", cached.StatusCode, requestLog.ID, r.Method, r.URL.String(), duration.Seconds())
+	logInfo("[%s] [%d] %s %s (%.3fs, cache hit)", requestLog.ID, cached.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
 func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
@@ -321,9 +321,7 @@ func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to query model report", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(reports)
+	serveJSON(w, reports)
 }
 
 func (g *Gateway) handleSummaryReport(w http.ResponseWriter, r *http.Request) {
@@ -334,9 +332,7 @@ func (g *Gateway) handleSummaryReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to query summary report", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(summary)
+	serveJSON(w, summary)
 }
 
 func (g *Gateway) handleDailyReport(w http.ResponseWriter, r *http.Request) {
@@ -347,9 +343,7 @@ func (g *Gateway) handleDailyReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to query daily report", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(daily)
+	serveJSON(w, daily)
 }
 
 func (g *Gateway) handleLogsReport(w http.ResponseWriter, r *http.Request) {
@@ -360,9 +354,7 @@ func (g *Gateway) handleLogsReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to query logs report", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(logs)
+	serveJSON(w, logs)
 }
 
 func (g *Gateway) handleLogDetailReport(w http.ResponseWriter, r *http.Request) {
@@ -378,9 +370,7 @@ func (g *Gateway) handleLogDetailReport(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "failed to query log detail", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(detail)
+	serveJSON(w, detail)
 }
 
 func (g *Gateway) getDays(r *http.Request) int {
@@ -555,18 +545,11 @@ func (g *Gateway) responseBodyForStorage(r *http.Request, meta RequestMeta, stat
 	return ""
 }
 
-func (g *Gateway) streamResponseBodyForStorage(responseBody []byte) string {
-	if !g.cfg.Logging.LogResponseBody {
-		return ""
+func serveJSON(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		logError("encode JSON response failed: %v", err)
 	}
-	return string(responseBody)
-}
-
-func (g *Gateway) cachedResponseBodyForStorage(responseBody string) string {
-	if g.cfg.Logging.LogResponseBody {
-		return responseBody
-	}
-	return ""
 }
 
 func (g *Gateway) saveExchange(requestLog RequestLog, responseLog ResponseLog, usage *UsageLog) {
