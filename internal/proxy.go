@@ -334,7 +334,6 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 	logInfo("[%s] [%d] %s %s (%.3fs, %s)", requestLog.ID, cached.StatusCode, r.Method, r.URL.String(), duration.Seconds(), logMsg)
 }
 
-
 func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
 	days := g.getDays(r)
 	reports, err := g.storage.ModelUsageReports(days)
