@@ -1,0 +1,29 @@
+name: Mirror
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  backup:
+    if: github.repository_owner == 'jiacai2050'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Codeberg
+        run: |
+          git push --tags --force \
+          https://${{ secrets.CBTOKEN }}@codeberg.org/${{ github.repository }}.git \
+          "refs/remotes/origin/*:refs/heads/*"
+
+      - name: Sourcecraft
+        if: always()
+        run: |
+          # https://sourcecraft.dev/jiacai2050/ai-menshen
+          git push --tags --force \
+          https://git:${{ secrets.SOURCECRAFT_TOKEN }}@git.sourcecraft.dev/${{ github.repository }}.git \
+          "refs/remotes/origin/*:refs/heads/*"

@@ -8,13 +8,13 @@ type RequestLog struct {
 	Path        string
 	Model       string
 	CacheKey    string
-	RequestBody string
+	RequestBody []byte
 }
 
 type ResponseLog struct {
 	RequestID         string
 	StatusCode        int
-	ResponseBody      string
+	ResponseBody      []byte
 	DurationMS        int64
 	FromCache         bool
 	CacheHitRequestID string
@@ -31,7 +31,7 @@ type UsageLog struct {
 type CachedResponse struct {
 	RequestID    string
 	StatusCode   int
-	ResponseBody string
+	ResponseBody []byte
 }
 
 type DailyUsage struct {
