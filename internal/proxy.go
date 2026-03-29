@@ -82,6 +82,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch r.URL.Path {
+		case "/favicon.ico", "/robots.txt":
+			w.WriteHeader(http.StatusNotFound)
+			return
 		case reportModelsPath:
 			g.handleModelReport(w, r)
 			return
@@ -131,7 +134,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if canUseCache(r, meta, g.cfg.Cache) {
-		cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxBodyBytes, g.cfg.Cache.MaxAge)
+		cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxAge)
 		if err != nil {
 			logError("cache lookup failed: %v", err)
 		}
