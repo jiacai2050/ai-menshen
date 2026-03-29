@@ -153,8 +153,8 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | **Upstream** | `timeout` | Upstream request timeout (seconds) | `300` (5 min) |
 | **Storage** | `retention_days` | Automatically purge logs older than X days | `90` |
 | **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
-| **Cache** | `enable` | Cache 200 responses (both non-stream JSON and `stream: true` SSE) | `true` |
-| | `max_body_bytes` | Skip caching responses larger than this size | `5242880` (5 MiB) |
+| **Cache** | `enable` | Cache 200 responses | `true` |
+| | `max_body_bytes` | Skip caching responses larger than this size (0 = no limit) | `5242880` (5 MiB) |
 | | `max_age` | Cache TTL in seconds (0 = never expire) | `0` |
 | **Logging** | `log_request_body` | Persist full request body in DB | `true` |
 | | `log_response_body` | Persist full response body in DB (required for cache) | `true` |

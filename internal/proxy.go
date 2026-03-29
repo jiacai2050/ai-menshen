@@ -220,9 +220,10 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	var limit int64
 	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose || canUseCache(r, meta, g.cfg.Cache) {
 		captured = &bytes.Buffer{}
-		limit = g.cfg.Cache.MaxBodyBytes
 		if g.cfg.Logging.LogResponseBody || g.cfg.Verbose {
 			limit = 0 // No limit for logging/verbose
+		} else {
+			limit = g.cfg.Cache.MaxBodyBytes
 		}
 	}
 	// Use a fixed sized buffer for streaming to keep memory overhead predictable
