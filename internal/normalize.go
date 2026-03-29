@@ -69,10 +69,6 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 		meta.EffectiveBody = effectiveBody
 	}
 
-	if meta.Stream {
-		return meta, nil
-	}
-
 	cacheKey, err := buildCacheKey(path, payload)
 	if err != nil {
 		return meta, fmt.Errorf("build cache key: %w", err)

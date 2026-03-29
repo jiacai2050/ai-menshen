@@ -29,7 +29,7 @@ path = "./data/menshen.db"  # supports ${ENV}
 
 [cache]
 enable = true
-# Skip caching responses larger than this size (bytes)
+# Skip caching responses larger than this size (bytes, 0 = no limit)
 max_body_bytes = 5242880
 # Cache TTL in seconds (0 = never expire)
 # max_age = 0

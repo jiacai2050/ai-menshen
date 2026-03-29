@@ -45,15 +45,15 @@
         <!-- Tab Navigation -->
         <nav class="tabs">
             <ul>
-                <li :class="tab === 'overview' ? 'active' : ''" @click="tab = 'overview'">Overview</li>
-                <li :class="tab === 'logs' ? 'active' : ''" @click="tab = 'logs'; fetchLogs()">Audit Logs</li>
+                <li :class="tab === 'overview' ? 'active' : ''" @click="setTab('overview')">Overview</li>
+                <li :class="tab === 'logs' ? 'active' : ''" @click="setTab('logs')">Audit Logs</li>
             </ul>
         </nav>
 
         <!-- Global Controls -->
         <div class="header-controls">
             <label>Period:</label>
-            <select x-model="days" @change="tab === 'overview' ? fetchOverview() : fetchLogs()">
+            <select x-model="days" @change="refreshData()">
                 <option value="7">Last 7 Days</option>
                 <option value="14">Last 14 Days</option>
                 <option value="30">Last 30 Days</option>
@@ -190,7 +190,26 @@
                 days: 14,
                 chart: null,
                 init() {
-                    this.fetchOverview();
+                    const hash = window.location.hash.slice(1);
+                    if (['overview', 'logs'].includes(hash)) {
+                        this.tab = hash;
+                    }
+                    window.addEventListener('hashchange', () => {
+                        const newHash = window.location.hash.slice(1);
+                        if (['overview', 'logs'].includes(newHash)) {
+                            this.tab = newHash;
+                            this.refreshData();
+                        }
+                    });
+                    this.refreshData();
+                },
+                setTab(t) {
+                    this.tab = t;
+                    window.location.hash = t;
+                    this.refreshData();
+                },
+                refreshData() {
+                    if (this.tab === 'overview') this.fetchOverview();
                     if (this.tab === 'logs') this.fetchLogs();
                 },
                 fetchOverview() {

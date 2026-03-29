@@ -139,7 +139,7 @@ func TestAnalyzeRequest(t *testing.T) {
 			}
 
 			expected := tt.expected
-			if expected.CacheKey == "" && !expected.Stream && len(expected.EffectiveBody) > 0 {
+			if expected.CacheKey == "" && len(expected.EffectiveBody) > 0 {
 				payload, ok := decodeJSONObject(expected.EffectiveBody)
 				if ok {
 					cacheKey, err := buildCacheKey(tt.path, payload)
