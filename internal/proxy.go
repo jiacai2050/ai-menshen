@@ -130,30 +130,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestBody: g.requestBodyForStorage(meta),
 	}
 
-	if meta.Stream {
-		if canUseCacheForStream(r, meta, g.cfg.Cache) {
-			cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxBodyBytes, g.cfg.Cache.MaxAge)
-			if err != nil {
-				logError("stream cache lookup failed: %v", err)
-			}
-			if cached != nil {
-				g.serveCachedStreamResponse(w, r, startedAt, requestLog, cached)
-				return
-			}
-		}
-		g.proxyStream(w, r, meta, requestLog)
-		return
-	}
-
 	if canUseCache(r, meta, g.cfg.Cache) {
 		cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxBodyBytes, g.cfg.Cache.MaxAge)
 		if err != nil {
 			logError("cache lookup failed: %v", err)
 		}
 		if cached != nil {
-			g.serveCachedResponse(w, r, startedAt, requestLog, cached)
+			g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
 			return
 		}
+	}
+
+	if meta.Stream {
+		g.proxyStream(w, r, meta, requestLog)
+		return
 	}
 
 	resp, duration, err := g.forwardUpstream(r, meta.EffectiveBody)
@@ -227,8 +217,13 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	flusher, _ := w.(http.Flusher)
 	usageExtractor := NewSSEUsageExtractor(requestLog.ID)
 	var captured *bytes.Buffer
-	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose || canUseCacheForStream(r, meta, g.cfg.Cache) {
+	var limit int64
+	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose || canUseCache(r, meta, g.cfg.Cache) {
 		captured = &bytes.Buffer{}
+		limit = g.cfg.Cache.MaxBodyBytes
+		if g.cfg.Logging.LogResponseBody || g.cfg.Verbose {
+			limit = 0 // No limit for logging/verbose
+		}
 	}
 	// Use a fixed sized buffer for streaming to keep memory overhead predictable
 	buffer := make([]byte, 16*1024)
@@ -249,7 +244,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 				// Do not break, keep proxying the stream
 			}
 			if captured != nil {
-				if g.cfg.Cache.MaxBodyBytes == 0 || int64(captured.Len()) < g.cfg.Cache.MaxBodyBytes {
+				if limit == 0 || int64(captured.Len()) < limit {
 					_, _ = captured.Write(chunk)
 				}
 			}
@@ -281,7 +276,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 
 	responseBody := ""
 	if captured != nil {
-		responseBody = g.streamResponseBodyForStorage(r, meta, resp.StatusCode, captured.Bytes())
+		responseBody = g.responseBodyForStorage(r, meta, resp.StatusCode, captured.Bytes())
 	}
 
 	responseLog := ResponseLog{
@@ -299,7 +294,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
 
-func (g *Gateway) serveCachedStreamResponse(w http.ResponseWriter, r *http.Request, startedAt time.Time, requestLog RequestLog, cached *CachedResponse) {
+func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, startedAt time.Time, requestLog RequestLog, cached *CachedResponse, isStream bool) {
 	duration := time.Since(startedAt)
 
 	responseLog := ResponseLog{
@@ -312,43 +307,33 @@ func (g *Gateway) serveCachedStreamResponse(w http.ResponseWriter, r *http.Reque
 	}
 	g.saveExchange(requestLog, responseLog, nil)
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	if isStream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+
 	w.Header().Set("X-Cache", "HIT")
 	w.WriteHeader(cached.StatusCode)
+
 	if _, err := io.WriteString(w, cached.ResponseBody); err != nil {
-		logError("[%s] write cached stream response failed: %v", requestLog.ID, err)
-	}
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
+		logError("[%s] write cached response failed: %v", requestLog.ID, err)
 	}
 
-	logInfo("[%s] [%d] %s %s (%.3fs, stream cache hit)", requestLog.ID, cached.StatusCode, r.Method, r.URL.String(), duration.Seconds())
+	if isStream {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+
+	logMsg := "cache hit"
+	if isStream {
+		logMsg = "stream cache hit"
+	}
+	logInfo("[%s] [%d] %s %s (%.3fs, %s)", requestLog.ID, cached.StatusCode, r.Method, r.URL.String(), duration.Seconds(), logMsg)
 }
 
-
-func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, startedAt time.Time, requestLog RequestLog, cached *CachedResponse) {
-	duration := time.Since(startedAt)
-
-	responseLog := ResponseLog{
-		RequestID:         requestLog.ID,
-		StatusCode:        cached.StatusCode,
-		ResponseBody:      g.cachedResponseBodyForStorage(cached.ResponseBody),
-		DurationMS:        duration.Milliseconds(),
-		FromCache:         true,
-		CacheHitRequestID: cached.RequestID,
-	}
-	g.saveExchange(requestLog, responseLog, nil)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Cache", "HIT")
-	w.WriteHeader(cached.StatusCode)
-	if _, err := io.WriteString(w, cached.ResponseBody); err != nil {
-		logError("write cached response failed: %v", err)
-	}
-
-	logInfo("[%s] [%d] %s %s (%.3fs, cache hit)", cached.StatusCode, requestLog.ID, r.Method, r.URL.String(), duration.Seconds())
-}
 
 func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
 	days := g.getDays(r)
@@ -587,13 +572,6 @@ func (g *Gateway) requestBodyForStorage(meta RequestMeta) string {
 
 func (g *Gateway) responseBodyForStorage(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte) string {
 	if g.cfg.Logging.LogResponseBody || canStoreCachedResponse(r, meta, statusCode, responseBody, g.cfg.Cache) {
-		return string(responseBody)
-	}
-	return ""
-}
-
-func (g *Gateway) streamResponseBodyForStorage(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte) string {
-	if g.cfg.Logging.LogResponseBody || canStoreCachedStreamResponse(r, meta, statusCode, responseBody, g.cfg.Cache) {
 		return string(responseBody)
 	}
 	return ""

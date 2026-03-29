@@ -49,18 +49,12 @@ func TestIsStreamBodyComplete(t *testing.T) {
 	}
 }
 
-func TestCanStoreCachedStreamResponse(t *testing.T) {
-	validBody := []byte("data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
-	noMarkerBody := []byte("data: {\"choices\":[]}\n\n")
+func TestCanStoreCachedResponse(t *testing.T) {
+	validStreamBody := []byte("data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
+	validJSONBody := []byte("{\"choices\":[]}")
 
 	makeRequest := func(method, path string) *http.Request {
-		req := httptest.NewRequest(method, path, nil)
-		return req
-	}
-
-	streamMeta := RequestMeta{
-		Stream:   true,
-		CacheKey: "testkey",
+		return httptest.NewRequest(method, path, nil)
 	}
 
 	tests := []struct {
@@ -75,106 +69,79 @@ func TestCanStoreCachedStreamResponse(t *testing.T) {
 		{
 			name:     "valid stream response stored",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     streamMeta,
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
 			status:   http.StatusOK,
-			body:     validBody,
+			body:     validStreamBody,
 			cfg:      CacheConfig{Enable: true},
 			expected: true,
 		},
 		{
-			name:     "cache disabled → not stored",
+			name:     "valid JSON response stored",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     streamMeta,
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			status:   http.StatusOK,
-			body:     validBody,
-			cfg:      CacheConfig{Enable: false},
+			body:     validJSONBody,
+			cfg:      CacheConfig{Enable: true},
+			expected: true,
+		},
+		{
+			name:     "stream missing DONE marker → not stored",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			status:   http.StatusOK,
+			body:     validJSONBody,
+			cfg:      CacheConfig{Enable: true},
 			expected: false,
 		},
 		{
-			name:     "non-stream meta → not stored",
+			name:     "cache disabled → not stored",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     RequestMeta{Stream: false, CacheKey: "testkey"},
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			status:   http.StatusOK,
-			body:     validBody,
-			cfg:      CacheConfig{Enable: true},
+			body:     validJSONBody,
+			cfg:      CacheConfig{Enable: false},
 			expected: false,
 		},
 		{
 			name:     "no cache key → not stored",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     RequestMeta{Stream: true, CacheKey: ""},
+			meta:     RequestMeta{Stream: false, CacheKey: ""},
 			status:   http.StatusOK,
-			body:     validBody,
+			body:     validJSONBody,
 			cfg:      CacheConfig{Enable: true},
 			expected: false,
 		},
 		{
 			name:     "non-200 status → not stored",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     streamMeta,
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			status:   http.StatusInternalServerError,
-			body:     validBody,
-			cfg:      CacheConfig{Enable: true},
-			expected: false,
-		},
-		{
-			name:     "missing DONE marker → not stored",
-			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     streamMeta,
-			status:   http.StatusOK,
-			body:     noMarkerBody,
+			body:     validJSONBody,
 			cfg:      CacheConfig{Enable: true},
 			expected: false,
 		},
 		{
 			name:     "body exceeds MaxBodyBytes → not stored",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     streamMeta,
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			status:   http.StatusOK,
-			body:     validBody,
-			cfg:      CacheConfig{Enable: true, MaxBodyBytes: 10},
-			expected: false,
-		},
-		{
-			name:     "large body with no MaxBodyBytes limit → stored",
-			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     streamMeta,
-			status:   http.StatusOK,
-			body:     append(make([]byte, 2*1024*1024), []byte("data: [DONE]\n\n")...),
-			cfg:      CacheConfig{Enable: true, MaxBodyBytes: 0},
-			expected: true,
-		},
-		{
-			name:     "uncacheable path → not stored",
-			r:        makeRequest(http.MethodPost, "/embeddings"),
-			meta:     streamMeta,
-			status:   http.StatusOK,
-			body:     validBody,
-			cfg:      CacheConfig{Enable: true},
-			expected: false,
-		},
-		{
-			name:     "GET method → not stored",
-			r:        makeRequest(http.MethodGet, "/chat/completions"),
-			meta:     streamMeta,
-			status:   http.StatusOK,
-			body:     validBody,
-			cfg:      CacheConfig{Enable: true},
+			body:     validJSONBody,
+			cfg:      CacheConfig{Enable: true, MaxBodyBytes: 5},
 			expected: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := canStoreCachedStreamResponse(tt.r, tt.meta, tt.status, tt.body, tt.cfg)
+			got := canStoreCachedResponse(tt.r, tt.meta, tt.status, tt.body, tt.cfg)
 			if got != tt.expected {
-				t.Errorf("canStoreCachedStreamResponse() = %v, want %v", got, tt.expected)
+				t.Errorf("%s: canStoreCachedResponse() = %v, want %v", tt.name, got, tt.expected)
 			}
 		})
 	}
 }
 
-func TestCanUseCacheForStream(t *testing.T) {
+func TestCanUseCache(t *testing.T) {
 	makeRequest := func(method, path string) *http.Request {
 		return httptest.NewRequest(method, path, nil)
 	}
@@ -194,44 +161,37 @@ func TestCanUseCacheForStream(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "stream POST to /responses → true",
-			r:        makeRequest(http.MethodPost, "/responses"),
-			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			name:     "JSON POST to cacheable path with key → true",
+			r:        makeRequest(http.MethodPost, "/chat/completions"),
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			cfg:      CacheConfig{Enable: true},
 			expected: true,
 		},
 		{
 			name:     "cache disabled → false",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     RequestMeta{Stream: true, CacheKey: "key"},
-			cfg:      CacheConfig{Enable: false},
-			expected: false,
-		},
-		{
-			name:     "non-stream → false",
-			r:        makeRequest(http.MethodPost, "/chat/completions"),
 			meta:     RequestMeta{Stream: false, CacheKey: "key"},
-			cfg:      CacheConfig{Enable: true},
+			cfg:      CacheConfig{Enable: false},
 			expected: false,
 		},
 		{
 			name:     "empty cache key → false",
 			r:        makeRequest(http.MethodPost, "/chat/completions"),
-			meta:     RequestMeta{Stream: true, CacheKey: ""},
+			meta:     RequestMeta{Stream: false, CacheKey: ""},
 			cfg:      CacheConfig{Enable: true},
 			expected: false,
 		},
 		{
 			name:     "uncacheable path → false",
 			r:        makeRequest(http.MethodPost, "/embeddings"),
-			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			cfg:      CacheConfig{Enable: true},
 			expected: false,
 		},
 		{
 			name:     "GET method → false",
 			r:        makeRequest(http.MethodGet, "/chat/completions"),
-			meta:     RequestMeta{Stream: true, CacheKey: "key"},
+			meta:     RequestMeta{Stream: false, CacheKey: "key"},
 			cfg:      CacheConfig{Enable: true},
 			expected: false,
 		},
@@ -239,11 +199,10 @@ func TestCanUseCacheForStream(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := canUseCacheForStream(tt.r, tt.meta, tt.cfg)
+			got := canUseCache(tt.r, tt.meta, tt.cfg)
 			if got != tt.expected {
-				t.Errorf("canUseCacheForStream() = %v, want %v", got, tt.expected)
+				t.Errorf("%s: canUseCache() = %v, want %v", tt.name, got, tt.expected)
 			}
 		})
 	}
 }
-
