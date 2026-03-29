@@ -46,7 +46,13 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Optional auth check for all routes (Proxy, Dashboard, Reports, Assets)
+	// 1. Silent rejection for common browser noise
+	if r.URL.Path == "/favicon.ico" || r.URL.Path == "/robots.txt" || strings.HasPrefix(r.URL.Path, "/apple-touch-icon") {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// 2. Optional auth check for all routes (Proxy, Dashboard, Reports, Assets)
 	if g.cfg.Auth.Enable {
 		isUI := r.URL.Path == "/" ||
 			strings.HasPrefix(r.URL.Path, "/__report/") ||
@@ -71,20 +77,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if r.Method == http.MethodGet {
-		if r.URL.Path == "/" {
-			g.handleDashboard(w)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/assets/") {
-			g.handleAssets(w, r)
-			return
-		}
+	// 3. UI, Report APIs, and Static Assets
+	if r.Method == http.MethodGet && r.URL.Path == "/" {
+		g.handleDashboard(w)
+		return
+	}
 
+	if strings.HasPrefix(r.URL.Path, "/assets/") {
+		g.handleAssets(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/__report/") {
 		switch r.URL.Path {
-		case "/favicon.ico", "/robots.txt":
-			w.WriteHeader(http.StatusNotFound)
-			return
 		case reportModelsPath:
 			g.handleModelReport(w, r)
 			return
@@ -101,6 +106,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g.handleLogDetailReport(w, r)
 			return
 		}
+	}
+
+	// 4. Proxy Path
+	if !isAuditablePath(r.URL.Path) {
+		g.proxyPassthrough(w, r)
+		return
 	}
 
 	startedAt := time.Now()
@@ -149,7 +160,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, duration, err := g.forwardUpstream(r, meta.EffectiveBody)
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
 	if err != nil {
 		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
@@ -201,7 +212,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog) {
-	resp, duration, err := g.forwardUpstream(r, meta.EffectiveBody)
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
 	if err != nil {
 		logError("[%s] stream upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
@@ -232,6 +243,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	// Use a fixed sized buffer for streaming to keep memory overhead predictable
 	buffer := make([]byte, 16*1024)
 
+	var readFailed bool
 	for {
 		n, readErr := resp.Body.Read(buffer)
 		if n > 0 {
@@ -259,6 +271,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		}
 		if readErr != nil {
 			logError("[%s] stream response copy failed: %v", requestLog.ID, readErr)
+			readFailed = true
 			break
 		}
 	}
@@ -278,24 +291,27 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		}
 	}
 
-	responseBody := ""
+	capturedBytes := []byte{}
 	if captured != nil {
-		responseBody = g.responseBodyForStorage(r, meta, resp.StatusCode, captured.Bytes())
+		capturedBytes = captured.Bytes()
 	}
+
+	statusCode := resp.StatusCode
+	if readFailed {
+		statusCode = http.StatusBadGateway
+	}
+
+	responseBody := g.responseBodyForStorage(r, meta, statusCode, capturedBytes)
 
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
-		StatusCode:   resp.StatusCode,
+		StatusCode:   statusCode,
 		ResponseBody: responseBody,
 		DurationMS:   elapsed.Milliseconds(),
 	}
 	g.saveExchange(requestLog, responseLog, usageExtractor.Usage())
 
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		logError("[%s] stream response drain failed: %v", requestLog.ID, err)
-	}
-
-	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), elapsed.Seconds())
+	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, statusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
 
 func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, startedAt time.Time, requestLog RequestLog, cached *CachedResponse, isStream bool) {
@@ -321,7 +337,7 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 	w.Header().Set("X-Cache", "HIT")
 	w.WriteHeader(cached.StatusCode)
 
-	if _, err := io.WriteString(w, cached.ResponseBody); err != nil {
+	if _, err := w.Write(cached.ResponseBody); err != nil {
 		logError("[%s] write cached response failed: %v", requestLog.ID, err)
 	}
 
@@ -446,13 +462,33 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(content)
 }
 
-func (g *Gateway) forwardUpstream(r *http.Request, body []byte) (*http.Response, time.Duration, error) {
+func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
+	resp, duration, err := g.forwardUpstream(r, r.Body)
+	if err != nil {
+		logError("passthrough upstream request failed: %v", err)
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		logError("passthrough response copy failed: %v", err)
+	}
+
+	if g.cfg.Verbose {
+		logInfo("[passthrough] [%d] %s %s (%.3fs)", resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
+	}
+}
+
+func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Response, time.Duration, error) {
 	targetURL, err := buildUpstreamURL(g.provider.BaseURL, r.URL)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, bytes.NewReader(body))
+	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, body)
 	if err != nil {
 		return nil, 0, fmt.Errorf("create upstream request: %w", err)
 	}
@@ -566,25 +602,25 @@ func isHopByHopHeader(header string) bool {
 	}
 }
 
-func (g *Gateway) requestBodyForStorage(meta RequestMeta) string {
+func (g *Gateway) requestBodyForStorage(meta RequestMeta) []byte {
 	if !g.cfg.Logging.LogRequestBody {
-		return ""
+		return nil
 	}
-	return string(meta.EffectiveBody)
+	return meta.EffectiveBody
 }
 
-func (g *Gateway) responseBodyForStorage(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte) string {
+func (g *Gateway) responseBodyForStorage(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte) []byte {
 	if g.cfg.Logging.LogResponseBody || canStoreCachedResponse(r, meta, statusCode, responseBody, g.cfg.Cache) {
-		return string(responseBody)
+		return responseBody
 	}
-	return ""
+	return nil
 }
 
-func (g *Gateway) cachedResponseBodyForStorage(responseBody string) string {
+func (g *Gateway) cachedResponseBodyForStorage(responseBody []byte) []byte {
 	if g.cfg.Logging.LogResponseBody {
 		return responseBody
 	}
-	return ""
+	return nil
 }
 
 func (g *Gateway) saveExchange(requestLog RequestLog, responseLog ResponseLog, usage *UsageLog) {

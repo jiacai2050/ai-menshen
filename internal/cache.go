@@ -5,9 +5,14 @@ import (
 	"net/http"
 )
 
-var cacheablePaths = map[string]struct{}{
+var auditablePaths = map[string]struct{}{
 	"/chat/completions": {},
 	"/responses":        {},
+}
+
+func isAuditablePath(path string) bool {
+	_, ok := auditablePaths[path]
+	return ok
 }
 
 // sseDoneMarker is the OpenAI-style end-of-stream marker for SSE responses.
@@ -20,7 +25,7 @@ func canUseCache(r *http.Request, meta RequestMeta, cacheConfig CacheConfig) boo
 	if r.Method != http.MethodPost {
 		return false
 	}
-	if _, ok := cacheablePaths[r.URL.Path]; !ok {
+	if _, ok := auditablePaths[r.URL.Path]; !ok {
 		return false
 	}
 	return true

@@ -129,12 +129,12 @@ func (s *Storage) init() error {
 		// 2. Dedicated body tables
 		`CREATE TABLE IF NOT EXISTS request_bodies (
 			request_id TEXT PRIMARY KEY,
-			content TEXT NOT NULL,
+			content BLOB NOT NULL,
 			FOREIGN KEY(request_id) REFERENCES request_logs(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS response_bodies (
 			request_id TEXT PRIMARY KEY,
-			content TEXT NOT NULL,
+			content BLOB NOT NULL,
 			FOREIGN KEY(request_id) REFERENCES request_logs(id) ON DELETE CASCADE
 		);`,
 		// 3. Usage table
@@ -210,12 +210,12 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 	}
 
 	// 2. Bodies
-	if request.RequestBody != "" {
+	if len(request.RequestBody) > 0 {
 		if _, err := tx.Exec(`INSERT INTO request_bodies (request_id, content) VALUES (?, ?)`, request.ID, request.RequestBody); err != nil {
 			return fmt.Errorf("insert request body: %w", err)
 		}
 	}
-	if response.ResponseBody != "" {
+	if len(response.ResponseBody) > 0 {
 		if _, err := tx.Exec(`INSERT INTO response_bodies (request_id, content) VALUES (?, ?)`, response.RequestID, response.ResponseBody); err != nil {
 			return fmt.Errorf("insert response body: %w", err)
 		}
@@ -301,13 +301,16 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 	var logs []LogEntry
 	for rows.Next() {
 		var l LogEntry
+		var reqPrev, resPrev []byte
 		if err := rows.Scan(
 			&l.ID, &l.CreatedAt, &l.Model, &l.Path,
 			&l.StatusCode, &l.DurationMS, &l.TotalTokens,
-			&l.RequestBodyPreview, &l.ResponseBodyPreview,
+			&reqPrev, &resPrev,
 		); err != nil {
 			return nil, fmt.Errorf("scan log entry: %w", err)
 		}
+		l.RequestBodyPreview = string(reqPrev)
+		l.ResponseBodyPreview = string(resPrev)
 		logs = append(logs, l)
 	}
 	return logs, nil
@@ -315,6 +318,7 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 
 func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 	var d LogDetail
+	var resBody, reqBody []byte
 	err := s.db.QueryRow(`
 		SELECT 
 			rl.id, rl.created_at, rl.model, rl.path, 
@@ -330,13 +334,15 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 		WHERE rl.id = ?
 	`, id).Scan(
 		&d.ID, &d.CreatedAt, &d.Model, &d.Path,
-		&d.StatusCode, &d.DurationMS, &d.ResponseBody,
-		&d.RequestBody,
+		&d.StatusCode, &d.DurationMS, &resBody,
+		&reqBody,
 		&d.TotalTokens,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query request detail: %w", err)
 	}
+	d.ResponseBody = string(resBody)
+	d.RequestBody = string(reqBody)
 	return &d, nil
 }
 
