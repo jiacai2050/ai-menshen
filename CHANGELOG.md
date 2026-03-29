@@ -1,12 +1,19 @@
 # Changelog
 
-## Unreleased
-
-### Changed
-- **Breaking**: upstream timeout config section renamed from `[http_client]` to `[upstream]`
+## v1.2.0 (2026-03-29)
 
 ### Added
-- Automatically inject `stream_options = { include_usage = true }` for stream requests when the client does not provide `stream_options`
+- **Passthrough Mode**: Silent proxying for non-auditable routes (e.g., non-completion APIs) to reduce storage noise and overhead
+- **Stream Caching**: Full support for caching and replaying SSE (Server-Sent Events) responses for `/chat/completions` and `/completions`
+- **Installation Proxy**: Added `--china` flag to `install.sh` to use a proxy for downloads in China
+- Automatic injection of `stream_options = { "include_usage": true }` for stream requests when the client does not provide it, ensuring usage data is captured
+
+### Changed
+- **Breaking**: Config section `[http_client]` renamed to `[upstream]` to better reflect its role in proxying
+- **Storage**: Response bodies are now stored as `BLOB` in SQLite for better performance and non-UTF-8 compatibility
+
+### Fixed
+- Stream response logging: Ensure partial/failed streams are marked as `502` or `206` to prevent incorrect cache hits
 
 ## v1.1.0 (2026-03-27)
 

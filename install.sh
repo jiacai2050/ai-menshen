@@ -9,6 +9,7 @@ GITHUB_URL="https://github.com/${REPO}"
 # Default values
 VERSION="latest"
 INSTALL_DIR="${HOME}/.local/bin"
+CHINA=false
 
 # Help message
 usage() {
@@ -16,6 +17,7 @@ usage() {
     echo "Options:"
     echo "  -v, --version <ver>      Release version (e.g. v1.0.0), default is latest"
     echo "  -p, --prefix <dir>       Directory to install binary, default is ~/.local/bin"
+    echo "  --china                  Use proxy for downloads (for users in China)"
     echo "  -h, --help               Show this help message"
     exit 1
 }
@@ -40,6 +42,10 @@ while [ "$#" -gt 0 ]; do
                 echo "Error: --prefix requires an argument"
                 usage
             fi
+            ;;
+        --china)
+            CHINA=true
+            shift
             ;;
         --help|-h)
             usage
@@ -84,6 +90,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 FILE_NAME="${BINARY_NAME}_${VERSION}_${OS}_${ARCH}.tar.gz"
 DOWNLOAD_URL="${GITHUB_URL}/releases/download/${VERSION}/${FILE_NAME}"
+
+if [ "$CHINA" = true ]; then
+    DOWNLOAD_URL="https://api.liujiacai.net/proxy/${DOWNLOAD_URL}"
+fi
 
 echo "Downloading ${BINARY_NAME} ${VERSION} for ${OS}/${ARCH}..."
 curl -fL "$DOWNLOAD_URL" -o "${TMP_DIR}/${FILE_NAME}"

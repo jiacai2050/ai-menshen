@@ -25,7 +25,6 @@ JSON objects are unordered by nature. `ai-menshen` recursively sorts all keys in
 Certain fields are part of the HTTP request but do not affect the model's output content. These are excluded to increase the cache hit rate:
 - `user`: Identifiers for the end-user.
 - `stream_options`: Options like `include_usage` which change the SSE framing but not the logical content.
-- `stream`: Explicitly excluded if `false` (streaming requests are never cached in the current version).
 
 ### C. Floating Point Stability
 To avoid discrepancies between different CPU architectures or Go versions, floating-point numbers (e.g., `temperature`, `top_p`) are formatted using a fixed deterministic decimal representation (`strconv.FormatFloat` with 'f' and precision -1).
@@ -40,10 +39,9 @@ The cache key calculation is designed for high-throughput environments:
 ## 5. Storage & Retrieval
 - **Backend**: SQLite `response_logs` table.
 - **Lookup**: An index on `request_logs.cache_key` ensures O(1) retrieval.
-- **Rule**: Only `200 OK` non-stream responses are eligible for caching.
+- **Rule**: Only `200 OK` responses are eligible for caching. Both non-stream and stream (SSE) responses are supported.
 - **Size Limit**: Configurable `max_body_bytes` prevents extremely large responses from bloating the database or memory.
 
 ## 6. Limitations & Future Work
-- **Stream Caching**: Currently not supported due to the complexity of replaying SSE chunks.
 - **Header Sensitivity**: Currently, HTTP headers (like `OpenAI-Organization`) are ignored. If headers start affecting upstream behavior, they should be added to the normalization logic.
 - **Multitenancy**: Cache is currently global. In a multi-user environment, a user identifier hash should be included in the `CacheKey`.

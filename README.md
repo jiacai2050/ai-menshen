@@ -63,6 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.
 | :--- | :--- | :--- |
 | `--version`, `-v` | Release version to install | `latest` |
 | `--prefix`, `-p` | Directory to install binary | `~/.local/bin` |
+| `--china` | Use proxy for downloads (for users in China) | `false` |
 
 ### Via Go Install
 
@@ -124,12 +125,11 @@ make build
         api_key="your-auth-token" # Match [auth].token if auth.enable = true (can be anything if false)
     )
 
-    # For streaming usage auditing, set include_usage=True
+    # Automatic usage auditing (even for streaming!)
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hello!"}],
-        stream=True,
-        stream_options={"include_usage": True}
+        stream=True
     )
     for chunk in response:
         print(chunk.choices[0].delta.content or "", end="")
