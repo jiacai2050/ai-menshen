@@ -1,8 +1,8 @@
 # ai-menshen
 
-ai-menshen (门神) is a local-first proxy for OpenAI-compatible APIs. It sits in front of your upstream providers to handle **Auth Injection (BYOK)**, **Model Overriding**, **Usage Auditing**, and **Caching**—keeping your API keys and logs strictly under your control.
+ai-menshen (门神) is a lightweight, local-first AI Gateway. It proxies any OpenAI-compatible API, providing **Auth Injection (BYOK)**, **Model Overriding**, **Usage Auditing**, and **Response Caching**—all while keeping your API keys and logs strictly under your control.
 
-> *Standalone Go binary. No external dependencies except SQLite.*
+> *Single Go binary. Zero external dependencies besides SQLite.*
 
 ```mermaid
 graph TD
@@ -35,9 +35,9 @@ graph TD
 
 ## Built-in Dashboard
 
-ai-menshen comes with a beautiful, lightweight dashboard accessible at `http://localhost:8080/` by default.
+ai-menshen ships with a lightweight, built-in dashboard at `http://localhost:8080/`.
 
-It has zero external CDN calls. All JS/CSS is embedded, making it perfect for offline or private environments.
+Zero external CDN calls—all JS/CSS is embedded, making it ideal for offline or air-gapped environments.
 
 | Overview & Trends | Audit Logs |
 | :---: | :---: |
@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.
 | :--- | :--- | :--- |
 | `--version`, `-v` | Release version to install | `latest` |
 | `--prefix`, `-p` | Directory to install binary | `~/.local/bin` |
-| `--china` | Use proxy for downloads (for users in China) | `false` |
+| `--china` | Use mirror for downloads (for users in China) | `false` |
 
 ### Via Go Install
 
@@ -165,7 +165,7 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | Section | Field | Description | Default |
 | :--- | :--- | :--- | :--- |
 | **Global** | `listen` | Local bind address | `:8080` |
-| **Auth** | `enable` | Enable authentication for proxy & dashboard | `false` |
+| **Auth** | `enable` | Enable authentication for gateway & dashboard | `false` |
 | | `user` | Username for **Dashboard** (Basic Auth) | - |
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
 | | `token` | Token for **API Requests** (Bearer Auth) | - |
