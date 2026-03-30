@@ -76,11 +76,22 @@ esac
 # Resolve 'latest' version if needed
 if [ "$VERSION" = "latest" ]; then
     echo "Resolving latest version..."
-    VERSION=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    # Use redirect-based approach to avoid GitHub API rate limits
+    VERSION=$(curl -sI "${GITHUB_URL}/releases/latest" | grep -i '^location:' | sed -E 's|.*/tag/([^ ]+).*|\1|' | tr -d '\r')
+    # Fallback to API (with optional GITHUB_TOKEN for higher rate limits)
+    if [ -z "$VERSION" ]; then
+        AUTH_HEADER=""
+        if [ -n "$GITHUB_TOKEN" ]; then
+            AUTH_HEADER="Authorization: token ${GITHUB_TOKEN}"
+        fi
+        VERSION=$(curl -s ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    fi
 fi
 
 if [ -z "$VERSION" ]; then
-    echo "Could not find version ${VERSION} for ${REPO}"
+    echo "Could not resolve latest version for ${REPO}. You can:"
+    echo "  1. Specify a version explicitly: $0 --version v1.0.0"
+    echo "  2. Set GITHUB_TOKEN to avoid API rate limits"
     exit 1
 fi
 
@@ -95,7 +106,7 @@ if [ "$CHINA" = true ]; then
     DOWNLOAD_URL="https://api.liujiacai.net/proxy/${DOWNLOAD_URL}"
 fi
 
-echo "Downloading ${BINARY_NAME} ${VERSION} for ${OS}/${ARCH}..."
+echo "Downloading ${BINARY_NAME} ${VERSION} for ${OS}/${ARCH} from ${DOWNLOAD_URL}..."
 curl -fL "$DOWNLOAD_URL" -o "${TMP_DIR}/${FILE_NAME}"
 
 echo "Extracting..."

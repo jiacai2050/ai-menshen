@@ -135,6 +135,29 @@ make build
         print(chunk.choices[0].delta.content or "", end="")
     ```
 
+## Run as Background Service (macOS)
+
+A launchd plist is provided at [`configs/net.liujiacai.ai-menshen.plist`](configs/net.liujiacai.ai-menshen.plist).
+
+```bash
+# Install the service
+cp configs/net.liujiacai.ai-menshen.plist ~/Library/LaunchAgents/
+
+# Load and start
+launchctl load ~/Library/LaunchAgents/net.liujiacai.ai-menshen.plist
+
+# Stop and unload
+launchctl unload ~/Library/LaunchAgents/net.liujiacai.ai-menshen.plist
+
+# Check status
+launchctl list | grep ai-menshen
+
+# View logs
+tail -f /tmp/ai-menshen-stderr.log
+```
+
+The service starts automatically on login and restarts on crash. It expects the binary at `~/.local/bin/ai-menshen` and config at `~/.config/ai-menshen/config.toml`.
+
 ## Configuration Guide
 
 Customize `config.toml` (template: [configs/example.toml](configs/example.toml)). `api_key`, `password`, `token`, `headers` and `storage.sqlite.path` values support **Environment Variables** (e.g., `${KEY}`).
