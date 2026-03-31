@@ -50,7 +50,7 @@ Iterates `failoverProviders()` (single provider if failover disabled). For each 
 
 After the loop, `ServeHTTP` checks the result:
 - `resp == nil` → all providers failed, 502
-- Stream → `proxyStream(resp, duration)` — chunked streaming with SSE usage extraction
+- Stream → `proxyStream(resp)` — chunked streaming with SSE usage extraction
 - Non-stream → read full body, extract usage, write response
 
 ## Design Principles

@@ -134,8 +134,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var meta RequestMeta
 	var resp *http.Response
 	var lastErr error
+	providers := g.failoverProviders()
 
-	for i, provider := range g.failoverProviders() {
+	for i, provider := range providers {
 		meta, err = AnalyzeRequest(r.URL.Path, requestBody, provider)
 		if err != nil {
 			logError("failed to analyze request: %v", err)
@@ -181,7 +182,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lastErr = fmt.Errorf("provider[%d] returned %d", i, resp.StatusCode)
 			resp = nil
 		}
-		if i < len(g.failoverProviders())-1 {
+		if i < len(providers)-1 {
 			logInfo("failover: provider[%d] (%s) failed: %v, trying next", i, provider.BaseURL, lastErr)
 		}
 	}
