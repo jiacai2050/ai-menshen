@@ -133,7 +133,6 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Try each provider in order (failover on 5xx/network errors)
 	var meta RequestMeta
 	var resp *http.Response
-	var totalDuration time.Duration
 	var lastErr error
 
 	for i, provider := range g.failoverProviders() {
@@ -168,7 +167,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp, totalDuration, lastErr = g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
+		resp, _, lastErr = g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
 		if lastErr == nil && resp.StatusCode < 500 {
 			if i > 0 {
 				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
@@ -187,6 +186,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	duration := time.Since(startedAt)
 	requestLog := RequestLog{
 		ID:          newRequestID(),
 		CreatedAt:   startedAt,
@@ -197,18 +197,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if resp == nil {
-		logError("[%s] all providers failed (%.3fs): %v", requestLog.ID, totalDuration.Seconds(), lastErr)
+		logError("[%s] all providers failed (%.3fs): %v", requestLog.ID, duration.Seconds(), lastErr)
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
-			DurationMS: totalDuration.Milliseconds(),
+			DurationMS: duration.Milliseconds(),
 		}, nil)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
 
 	if meta.Stream {
-		g.proxyStream(w, r, meta, requestLog, resp, totalDuration)
+		g.proxyStream(w, r, meta, requestLog, resp)
 		return
 	}
 	defer resp.Body.Close()
@@ -219,7 +219,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
-			DurationMS: totalDuration.Milliseconds(),
+			DurationMS: duration.Milliseconds(),
 		}, nil)
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -238,7 +238,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestID:    requestLog.ID,
 		StatusCode:   resp.StatusCode,
 		ResponseBody: g.responseBodyForStorage(r, meta, resp.StatusCode, responseBody),
-		DurationMS:   totalDuration.Milliseconds(),
+		DurationMS:   duration.Milliseconds(),
 	}
 	g.saveExchange(requestLog, responseLog, usage)
 
@@ -248,10 +248,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logError("[%s] write response failed: %v", requestLog.ID, err)
 	}
 
-	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), totalDuration.Seconds())
+	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, resp *http.Response, duration time.Duration) {
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, resp *http.Response) {
 	defer resp.Body.Close()
 
 	copyResponseHeaders(w.Header(), resp.Header)
@@ -305,10 +305,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		}
 	}
 
-	elapsed := duration
-	if total := time.Since(requestLog.CreatedAt); total > elapsed {
-		elapsed = total
-	}
+	elapsed := time.Since(requestLog.CreatedAt)
 
 	if err := usageExtractor.Finalize(); err != nil {
 		logError("[%s] stream usage extraction failed: %v", requestLog.ID, err)
