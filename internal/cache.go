@@ -20,6 +20,8 @@ var sseDoneMarker = []byte("data: [DONE]")
 
 // isStreamBodyComplete reports whether a captured SSE body ends with the
 // OpenAI end-of-stream marker "data: [DONE]", indicating a complete response.
+// We check for the suffix to avoid false positives if the marker appears
+// within the model's generated content.
 func isStreamBodyComplete(body []byte) bool {
 	return bytes.HasSuffix(bytes.TrimSpace(body), sseDoneMarker)
 }

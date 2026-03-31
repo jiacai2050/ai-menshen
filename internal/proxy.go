@@ -127,40 +127,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logInfo("Request Body: %s", string(meta.OriginalBody))
 	}
 
-	// Prepare for primary provider (cache lookup + request body)
-	body, cacheKey, model := PrepareForProvider(r.URL.Path, meta, g.providers[0])
-
 	requestLog := RequestLog{
 		ID:        newRequestID(),
 		CreatedAt: startedAt,
 		Path:      r.URL.Path,
-		Model:     model,
-		CacheKey:  cacheKey,
-	}
-	if g.cfg.Logging.LogRequestBody {
-		requestLog.RequestBody = body
 	}
 
-	// Cache lookup (primary provider only)
-	if g.cfg.Cache.Enable && cacheKey != "" && r.Method == http.MethodPost {
-		cached, err := g.storage.FindCachedResponse(cacheKey, g.cfg.Cache.MaxAge)
-		if err != nil {
-			logError("cache lookup failed: %v", err)
-		}
-		if cached != nil {
-			g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
-			return
-		}
-	}
+	fwd := g.forwardWithFailover(r, meta, &requestLog)
 
-	if meta.Stream {
-		g.proxyStream(w, r, meta, requestLog, body)
+	if fwd.Cached != nil {
+		g.serveCachedResponse(w, r, startedAt, requestLog, fwd.Cached, meta.Stream)
 		return
 	}
 
-	fwd, err := g.forwardWithFailover(r, meta, forwardResult{Body: body, CacheKey: cacheKey, Model: model})
-	if err != nil {
-		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, fwd.Duration.Seconds(), err)
+	if fwd.Err != nil {
+		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, fwd.Duration.Seconds(), fwd.Err)
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
@@ -169,13 +150,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
-	defer fwd.Resp.Body.Close()
 
-	requestLog.Model = fwd.Model
-	requestLog.CacheKey = fwd.CacheKey
-	if g.cfg.Logging.LogRequestBody {
-		requestLog.RequestBody = fwd.Body
+	if meta.Stream {
+		g.proxyStream(w, r, meta, requestLog, fwd)
+		return
 	}
+	defer fwd.Resp.Body.Close()
 
 	responseBody, err := io.ReadAll(fwd.Resp.Body)
 	if err != nil {
@@ -199,7 +179,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	storedResponseBody := responseBody
-	if !g.cfg.Logging.LogResponseBody && !canStoreCachedResponse(r, fwd.CacheKey, meta, fwd.Resp.StatusCode, responseBody, g.cfg.Cache) {
+	if !g.cfg.Logging.LogResponseBody && !canStoreCachedResponse(r, requestLog.CacheKey, meta, fwd.Resp.StatusCode, responseBody, g.cfg.Cache) {
 		storedResponseBody = nil
 	}
 
@@ -220,25 +200,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, fwd.Resp.StatusCode, r.Method, r.URL.String(), fwd.Duration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, primaryBody []byte) {
-	fwd, err := g.forwardWithFailover(r, meta, forwardResult{Body: primaryBody, CacheKey: requestLog.CacheKey, Model: requestLog.Model})
-	if err != nil {
-		logError("[%s] stream upstream request failed (%.3fs): %v", requestLog.ID, fwd.Duration.Seconds(), err)
-		g.saveExchange(requestLog, ResponseLog{
-			RequestID:  requestLog.ID,
-			StatusCode: http.StatusBadGateway,
-			DurationMS: fwd.Duration.Milliseconds(),
-		}, nil)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, fwd forwardResult) {
 	defer fwd.Resp.Body.Close()
-
-	requestLog.Model = fwd.Model
-	requestLog.CacheKey = fwd.CacheKey
-	if g.cfg.Logging.LogRequestBody {
-		requestLog.RequestBody = fwd.Body
-	}
 
 	copyResponseHeaders(w.Header(), fwd.Resp.Header)
 	w.WriteHeader(fwd.Resp.StatusCode)
@@ -247,15 +210,16 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	usageExtractor := NewSSEUsageExtractor(requestLog.ID)
 	var captured *bytes.Buffer
 	var limit int64
-	shouldCapture := g.cfg.Logging.LogResponseBody || g.cfg.Verbose || (g.cfg.Cache.Enable && fwd.CacheKey != "")
+	shouldCapture := g.cfg.Logging.LogResponseBody || g.cfg.Verbose || (g.cfg.Cache.Enable && requestLog.CacheKey != "")
 	if shouldCapture {
 		captured = &bytes.Buffer{}
 		if g.cfg.Logging.LogResponseBody || g.cfg.Verbose {
-			limit = 0
+			limit = 0 // No limit for logging/verbose
 		} else {
 			limit = g.cfg.Cache.MaxBodyBytes
 		}
 	}
+	// Use a fixed sized buffer for streaming to keep memory overhead predictable
 	buffer := make([]byte, 16*1024)
 
 	var readFailed bool
@@ -272,6 +236,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 			}
 			if err := usageExtractor.Write(chunk); err != nil {
 				logError("[%s] stream usage extraction failed: %v", requestLog.ID, err)
+				// Do not break, keep proxying the stream
 			}
 			if captured != nil {
 				if limit == 0 || int64(captured.Len()) < limit {
@@ -299,8 +264,10 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		logError("[%s] stream usage extraction failed: %v", requestLog.ID, err)
 	}
 
-	if captured != nil && captured.Len() > 0 && g.cfg.Verbose {
-		logInfo("Stream Response Body: %s", captured.String())
+	if captured != nil && captured.Len() > 0 {
+		if g.cfg.Verbose {
+			logInfo("Stream Response Body: %s", captured.String())
+		}
 	}
 
 	capturedBytes := []byte{}
@@ -314,7 +281,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 	}
 
 	storedResponseBody := capturedBytes
-	if !g.cfg.Logging.LogResponseBody && !canStoreCachedResponse(r, fwd.CacheKey, meta, statusCode, capturedBytes, g.cfg.Cache) {
+	if !g.cfg.Logging.LogResponseBody && !canStoreCachedResponse(r, requestLog.CacheKey, meta, statusCode, capturedBytes, g.cfg.Cache) {
 		storedResponseBody = nil
 	}
 
@@ -499,15 +466,14 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 
 type forwardResult struct {
 	Resp     *http.Response
+	Cached   *CachedResponse
+	Err      error
 	Duration time.Duration
-	Body     []byte // effective request body for the successful provider
-	CacheKey string
-	Model    string
 }
 
-// forwardWithFailover tries each provider in order.
-// primary contains the pre-prepared body/cacheKey/model for providers[0].
-func (g *Gateway) forwardWithFailover(r *http.Request, meta RequestMeta, primary forwardResult) (forwardResult, error) {
+// forwardWithFailover prepares the request for each provider, checks cache (primary only),
+// and tries upstream in order. It fills requestLog with the final provider's info.
+func (g *Gateway) forwardWithFailover(r *http.Request, meta RequestMeta, requestLog *RequestLog) forwardResult {
 	providers := g.providers
 	if !g.cfg.FailoverEnabled() {
 		providers = providers[:1]
@@ -517,21 +483,32 @@ func (g *Gateway) forwardWithFailover(r *http.Request, meta RequestMeta, primary
 	var totalDuration time.Duration
 
 	for i, provider := range providers {
-		result := primary
-		if i > 0 {
-			result.Body, result.CacheKey, result.Model = PrepareForProvider(r.URL.Path, meta, provider)
+		body, cacheKey, model := PrepareForProvider(r.URL.Path, meta, provider)
+		requestLog.Model = model
+		requestLog.CacheKey = cacheKey
+		if g.cfg.Logging.LogRequestBody {
+			requestLog.RequestBody = body
 		}
 
-		resp, duration, err := g.forwardUpstream(r, bytes.NewReader(result.Body), provider)
+		// Cache lookup for primary provider only
+		if i == 0 && g.cfg.Cache.Enable && cacheKey != "" && r.Method == http.MethodPost {
+			cached, err := g.storage.FindCachedResponse(cacheKey, g.cfg.Cache.MaxAge)
+			if err != nil {
+				logError("cache lookup failed: %v", err)
+			}
+			if cached != nil {
+				return forwardResult{Cached: cached}
+			}
+		}
+
+		resp, duration, err := g.forwardUpstream(r, bytes.NewReader(body), provider)
 		totalDuration += duration
 
 		if err == nil && resp.StatusCode < 500 {
 			if i > 0 {
 				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
 			}
-			result.Resp = resp
-			result.Duration = totalDuration
-			return result, nil
+			return forwardResult{Resp: resp, Duration: totalDuration}
 		}
 
 		if resp != nil {
@@ -547,7 +524,7 @@ func (g *Gateway) forwardWithFailover(r *http.Request, meta RequestMeta, primary
 		}
 	}
 
-	return forwardResult{Duration: totalDuration}, fmt.Errorf("all %d providers failed, last: %w", len(providers), lastErr)
+	return forwardResult{Duration: totalDuration, Err: fmt.Errorf("all %d providers failed, last: %w", len(providers), lastErr)}
 }
 
 func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {
