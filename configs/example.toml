@@ -17,9 +17,16 @@ api_key = "${OPENAI_API_KEY}"  # supports ${ENV}
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
 # headers = { "cf-aig-authorization" = "Bearer ${CLOUDFLARE_API_KEY}" }  # values support ${ENV}
 
+# Add more [[providers]] blocks for failover (requires upstream.failover = true)
+# [[providers]]
+# base_url = "https://api.deepseek.com"
+# api_key = "${DEEPSEEK_API_KEY}"
+
 [upstream]
 # Upstream request timeout in seconds (default: 300)
 # timeout = 300
+# Enable automatic failover to next provider on 5xx/network errors (default: false)
+# failover = false
 
 [storage]
 retention_days = 90

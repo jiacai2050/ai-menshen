@@ -38,7 +38,8 @@ type ProviderConfig struct {
 }
 
 type UpstreamConfig struct {
-	Timeout int `toml:"timeout"`
+	Timeout  int  `toml:"timeout"`
+	Failover bool `toml:"failover"`
 }
 
 type SQLiteConfig struct {
@@ -172,6 +173,6 @@ func LoadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c Config) PrimaryProvider() ProviderConfig {
-	return c.Providers[0]
+func (c Config) FailoverEnabled() bool {
+	return c.Upstream.Failover && len(c.Providers) > 1
 }

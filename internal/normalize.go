@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"hash"
 	"io"
 	"sort"
@@ -22,27 +21,20 @@ var (
 	}
 )
 
-func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestMeta, error) {
+func ParseRequest(body []byte) RequestMeta {
 	meta := RequestMeta{
-		EffectiveBody: body,
+		OriginalBody: body,
 	}
 
 	if len(body) == 0 {
-		return meta, nil
+		return meta
 	}
 
 	payload, ok := decodeJSONObject(body)
 	if !ok {
-		return meta, nil
+		return meta
 	}
-
-	needsMarshal := false
-	if provider.Model != "" {
-		if current, ok := payload["model"].(string); !ok || current != provider.Model {
-			payload["model"] = provider.Model
-			needsMarshal = true
-		}
-	}
+	meta.Payload = payload
 
 	if model, ok := payload["model"].(string); ok {
 		meta.EffectiveModel = model
@@ -57,25 +49,40 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 			payload["stream_options"] = map[string]any{
 				"include_usage": true,
 			}
-			needsMarshal = true
 		}
 	}
 
-	if needsMarshal {
-		effectiveBody, err := json.Marshal(payload)
-		if err != nil {
-			return meta, fmt.Errorf("marshal effective request body: %w", err)
-		}
-		meta.EffectiveBody = effectiveBody
+	return meta
+}
+
+// PrepareForProvider applies model override and builds cache key for a specific provider.
+// Returns the marshaled request body, cache key, and effective model.
+// Does not modify meta.Payload.
+func PrepareForProvider(path string, meta RequestMeta, provider ProviderConfig) (body []byte, cacheKey string, model string) {
+	if meta.Payload == nil {
+		return meta.OriginalBody, "", meta.EffectiveModel
 	}
 
-	cacheKey, err := buildCacheKey(path, payload)
+	payload := meta.Payload
+	model = meta.EffectiveModel
+
+	if provider.Model != "" && provider.Model != model {
+		// Clone to avoid mutating the shared map
+		payload = make(map[string]any, len(meta.Payload))
+		for k, v := range meta.Payload {
+			payload[k] = v
+		}
+		payload["model"] = provider.Model
+		model = provider.Model
+	}
+
+	cacheKey, _ = buildCacheKey(path, payload)
+
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return meta, fmt.Errorf("build cache key: %w", err)
+		return meta.OriginalBody, cacheKey, model
 	}
-	meta.CacheKey = cacheKey
-
-	return meta, nil
+	return body, cacheKey, model
 }
 
 func decodeJSONObject(body []byte) (map[string]any, bool) {

@@ -82,10 +82,15 @@ func run(configPath string) error {
 		return err
 	}
 
-	provider := cfg.PrimaryProvider()
-	log.Printf("ai-menshen started on %s -> %s", cfg.Listen, provider.BaseURL)
-	if provider.Model != "" {
-		log.Printf("Provider model override enabled: %s", provider.Model)
+	log.Printf("ai-menshen started on %s", cfg.Listen)
+	for i, p := range cfg.Providers {
+		log.Printf("  provider[%d]: %s", i, p.BaseURL)
+		if p.Model != "" {
+			log.Printf("  provider[%d] model override: %s", i, p.Model)
+		}
+	}
+	if cfg.FailoverEnabled() {
+		log.Printf("Failover enabled across %d providers", len(cfg.Providers))
 	}
 
 	server := &http.Server{
