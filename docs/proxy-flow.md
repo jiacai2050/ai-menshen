@@ -2,51 +2,68 @@
 
 ## Routing
 
-```
-Request → ServeHTTP
-  ├─ Browser noise (favicon, robots.txt) → 404
-  ├─ Auth check → Basic Auth for UI, Bearer Token for API
-  ├─ Dashboard / Assets / Reports → static files or DB queries
-  ├─ Non-auditable path → proxyPassthrough (forward as-is via primary provider)
-  └─ Auditable path (/chat/completions, /responses) → see below
+```mermaid
+flowchart TD
+    REQ[Request] --> NOISE{Browser noise?}
+    NOISE -->|Yes| N404[404]
+    NOISE -->|No| AUTH{Auth enabled?}
+    AUTH -->|Fail| N401[401]
+    AUTH -->|Pass| ROUTE{Route}
+    ROUTE -->|"/ or /assets or /__report"| STATIC[Dashboard / Assets / Reports]
+    ROUTE -->|Non-auditable| PASS[proxyPassthrough]
+    ROUTE -->|"/chat/completions or /responses"| AUDIT[Auditable Flow]
 ```
 
 ## Auditable Request Flow
 
+```mermaid
+flowchart TD
+    AUDIT[ReadAll body] --> PARSE["ParseRequest(body)<br/>JSON decode once"]
+    PARSE --> FWD["forwardWithFailover(r, meta, &requestLog)"]
+
+    FWD --> PREP["PrepareForProvider(provider)<br/>model override + marshal + cache key"]
+    PREP --> CACHE{Cache hit?<br/>primary only}
+    CACHE -->|Yes| CACHED[Return Cached]
+    CACHE -->|No| UPSTREAM["forwardUpstream(provider)"]
+    UPSTREAM --> OK{Status < 500?}
+    OK -->|Yes| RESP[Return Resp]
+    OK -->|No| NEXT{More providers?}
+    NEXT -->|Yes| PREP
+    NEXT -->|No| ERR[Return Err]
+
+    CACHED --> R1[serveCachedResponse]
+    ERR --> R2[502 + save log]
+    RESP --> STREAM{Stream?}
+    STREAM -->|Yes| R3[proxyStream: chunk + flush]
+    STREAM -->|No| R4[ReadAll + write response]
+    R3 --> SAVE[Extract usage + save exchange]
+    R4 --> SAVE
 ```
-ReadAll(body) → ParseRequest → PrepareForProvider(primary) → Cache lookup
-  ├─ Cache hit → serveCachedResponse → done
-  └─ Cache miss
-       ├─ stream  → proxyStream  → forwardWithFailover → stream response
-       └─ regular → ServeHTTP    → forwardWithFailover → buffered response
-```
 
-### Step 1: Parse (once)
+### ParseRequest (once, provider-independent)
 
-`ParseRequest(body)` — single JSON decode, extracts `stream` and `model`, injects `stream_options` for streaming. Retains the parsed payload map for reuse.
+Single JSON decode. Extracts `stream` and `model`, injects `stream_options` for streaming. Retains the parsed payload map for reuse.
 
-### Step 2: Prepare + Cache (primary provider only)
+### forwardWithFailover
 
-`PrepareForProvider(path, meta, provider)` — applies model override (clones map if needed), builds cache key, marshals body. Cache is checked only for the primary provider.
+Iterates providers (single if failover disabled). For each provider:
 
-### Step 3: Forward
+1. `PrepareForProvider` — applies model override (clones map if needed), builds cache key, marshals body. Fills `requestLog` fields.
+2. Cache lookup (primary provider only) — hit returns immediately.
+3. `forwardUpstream` — builds URL, injects provider auth/headers, sends request.
+4. Non-5xx → return success. 5xx/error → try next provider.
 
-`forwardWithFailover(r, meta)` — pure forwarding logic:
-- Iterates providers (just primary if failover disabled)
-- Calls `PrepareForProvider` per provider, then `forwardUpstream`
-- Returns on first non-5xx response, or error if all fail
-- No cache logic, no response writing
+### Response handling (caller)
 
-### Step 4: Handle Response (caller)
-
-The caller (`ServeHTTP` or `proxyStream`) owns all response writing and log storage:
-- Updates `requestLog` with the final provider's model/cacheKey/body
-- Reads response, extracts usage, saves exchange, writes to client
+`ServeHTTP` dispatches on the `forwardResult`:
+- `Cached` → serve from cache
+- `Err` → 502
+- `Resp` + stream → `proxyStream` (chunked streaming with SSE usage extraction)
+- `Resp` + non-stream → read full body, extract usage, write response
 
 ## Design Principles
 
 - **Single JSON decode** — `ParseRequest` parses once, payload map reused across providers
 - **One marshal per provider attempt** — only in `PrepareForProvider`
-- **Cache at the outer layer** — checked once for primary provider before entering failover
-- **No shared mutation** — model override clones the map
-- **Clean separation** — `forwardWithFailover` never touches `ResponseWriter`
+- **No shared mutation** — model override clones the payload map
+- **`forwardWithFailover` never touches `ResponseWriter`** — returns data, caller writes
