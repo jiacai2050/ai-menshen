@@ -80,8 +80,8 @@ type LogDetail struct {
 }
 
 type RequestMeta struct {
-	OriginalBody   []byte
+	EffectiveBody  []byte
 	EffectiveModel string
+	CacheKey       string
 	Stream         bool
-	Payload        map[string]any // parsed JSON payload, nil if body is not JSON
 }

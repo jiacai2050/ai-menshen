@@ -75,36 +75,56 @@ func TestBuildCacheKeyExplicit(t *testing.T) {
 	}
 }
 
-func TestParseRequest(t *testing.T) {
+func TestAnalyzeRequest(t *testing.T) {
 	tests := []struct {
 		name     string
+		path     string
 		body     []byte
+		provider ProviderConfig
 		expected RequestMeta
 	}{
 		{
-			name:     "empty body",
-			expected: RequestMeta{},
-		},
-		{
-			name: "non-json passthrough",
-			body: []byte("not json"),
+			name: "empty body",
+			path: "/v1/chat/completions",
 			expected: RequestMeta{
-				OriginalBody: []byte("not json"),
+				EffectiveBody: nil,
 			},
 		},
 		{
-			name: "basic model extraction",
-			body: []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`),
+			name:     "non-json passthrough",
+			path:     "/v1/chat/completions",
+			body:     []byte("not json"),
+			provider: ProviderConfig{Model: "gpt-4.1"},
 			expected: RequestMeta{
-				OriginalBody:   []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`),
-				EffectiveModel: "gpt-4o-mini",
+				EffectiveBody: []byte("not json"),
 			},
 		},
 		{
-			name: "stream detection",
+			name:     "provider model override builds cache key",
+			path:     "/v1/chat/completions",
+			body:     []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`),
+			provider: ProviderConfig{Model: "gpt-4.1"},
+			expected: RequestMeta{
+				EffectiveBody:  []byte(`{"messages":[{"content":"hi","role":"user"}],"model":"gpt-4.1"}`),
+				EffectiveModel: "gpt-4.1",
+			},
+		},
+		{
+			name: "stream adds default stream options",
+			path: "/v1/chat/completions",
 			body: []byte(`{"model":"gpt-4o","messages":[],"stream":true}`),
 			expected: RequestMeta{
-				OriginalBody:   []byte(`{"model":"gpt-4o","messages":[],"stream":true}`),
+				EffectiveBody:  []byte(`{"messages":[],"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true}}`),
+				EffectiveModel: "gpt-4o",
+				Stream:         true,
+			},
+		},
+		{
+			name: "stream preserves user stream options",
+			path: "/v1/chat/completions",
+			body: []byte(`{"model":"gpt-4o","messages":[],"stream":true,"stream_options":{"include_usage":false}}`),
+			expected: RequestMeta{
+				EffectiveBody:  []byte(`{"messages":[],"model":"gpt-4o","stream":true,"stream_options":{"include_usage":false}}`),
 				EffectiveModel: "gpt-4o",
 				Stream:         true,
 			},
@@ -113,92 +133,30 @@ func TestParseRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			meta := ParseRequest(tt.body)
+			meta, err := AnalyzeRequest(tt.path, tt.body, tt.provider)
+			if err != nil {
+				t.Fatalf("AnalyzeRequest() error = %v", err)
+			}
 
-			if meta.EffectiveModel != tt.expected.EffectiveModel {
-				t.Errorf("EffectiveModel = %s, want %s", meta.EffectiveModel, tt.expected.EffectiveModel)
+			expected := tt.expected
+			if expected.CacheKey == "" && len(expected.EffectiveBody) > 0 {
+				payload, ok := decodeJSONObject(expected.EffectiveBody)
+				if ok {
+					cacheKey, err := buildCacheKey(tt.path, payload)
+					if err != nil {
+						t.Fatalf("buildCacheKey() error = %v", err)
+					}
+					expected.CacheKey = cacheKey
+				}
 			}
-			if meta.Stream != tt.expected.Stream {
-				t.Errorf("Stream = %v, want %v", meta.Stream, tt.expected.Stream)
-			}
-			if !reflect.DeepEqual(meta.OriginalBody, tt.expected.OriginalBody) {
-				t.Errorf("OriginalBody = %s, want %s", meta.OriginalBody, tt.expected.OriginalBody)
-			}
-		})
-	}
-}
 
-func TestPrepareForProvider(t *testing.T) {
-	tests := []struct {
-		name          string
-		body          []byte
-		provider      ProviderConfig
-		expectedModel string
-		expectedBody  []byte
-		hasCacheKey   bool
-	}{
-		{
-			name:          "no override",
-			body:          []byte(`{"model":"gpt-4o","messages":[]}`),
-			provider:      ProviderConfig{},
-			expectedModel: "gpt-4o",
-			expectedBody:  []byte(`{"messages":[],"model":"gpt-4o"}`),
-			hasCacheKey:   true,
-		},
-		{
-			name:          "model override",
-			body:          []byte(`{"model":"gpt-4o-mini","messages":[]}`),
-			provider:      ProviderConfig{Model: "gpt-4.1"},
-			expectedModel: "gpt-4.1",
-			expectedBody:  []byte(`{"messages":[],"model":"gpt-4.1"}`),
-			hasCacheKey:   true,
-		},
-		{
-			name:          "non-json passthrough",
-			body:          []byte("not json"),
-			provider:      ProviderConfig{Model: "gpt-4.1"},
-			expectedModel: "",
-			expectedBody:  []byte("not json"),
-			hasCacheKey:   false,
-		},
-	}
+			meta.EffectiveBody = canonicalBody(t, meta.EffectiveBody)
+			expected.EffectiveBody = canonicalBody(t, expected.EffectiveBody)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			meta := ParseRequest(tt.body)
-			body, cacheKey, model := PrepareForProvider("/v1/chat/completions", meta, tt.provider)
-
-			body = canonicalBody(t, body)
-			expectedBody := canonicalBody(t, tt.expectedBody)
-
-			if !reflect.DeepEqual(body, expectedBody) {
-				t.Errorf("body = %s, want %s", body, expectedBody)
-			}
-			if model != tt.expectedModel {
-				t.Errorf("model = %s, want %s", model, tt.expectedModel)
-			}
-			if tt.hasCacheKey && cacheKey == "" {
-				t.Error("expected non-empty cache key")
-			}
-			if !tt.hasCacheKey && cacheKey != "" {
-				t.Errorf("expected empty cache key, got %s", cacheKey)
+			if !reflect.DeepEqual(meta, expected) {
+				t.Fatalf("AnalyzeRequest() = %#v, want %#v", meta, expected)
 			}
 		})
-	}
-}
-
-func TestPrepareForProviderCacheKeyDiffers(t *testing.T) {
-	body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
-	meta := ParseRequest(body)
-
-	_, key1, _ := PrepareForProvider("/chat/completions", meta, ProviderConfig{Model: "gpt-4o"})
-	_, key2, _ := PrepareForProvider("/chat/completions", meta, ProviderConfig{Model: "gpt-4.1"})
-
-	if key1 == "" || key2 == "" {
-		t.Fatal("expected non-empty cache keys")
-	}
-	if key1 == key2 {
-		t.Errorf("cache keys should differ for different models, got %s", key1)
 	}
 }
 

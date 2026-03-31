@@ -39,7 +39,7 @@ type ProviderConfig struct {
 
 type UpstreamConfig struct {
 	Timeout  int  `toml:"timeout"`
-	Failover bool `toml:"failover"`
+	Failover bool `toml:"failover"` // Auto-failover to next provider on 5xx/network errors
 }
 
 type SQLiteConfig struct {

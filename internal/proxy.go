@@ -26,22 +26,31 @@ const (
 )
 
 type Gateway struct {
-	cfg       Config
-	providers []ProviderConfig
-	storage   *Storage
-	client    *http.Client
+	cfg     Config
+	storage *Storage
+	client  *http.Client
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	service := &Gateway{
-		cfg:       cfg,
-		providers: cfg.Providers,
-		storage:   storage,
-		client:    &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
+		cfg:     cfg,
+		storage: storage,
+		client:  &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
 	}
 
 	return service, nil
+}
+
+func (g *Gateway) primaryProvider() ProviderConfig {
+	return g.cfg.Providers[0]
+}
+
+func (g *Gateway) failoverProviders() []ProviderConfig {
+	if g.cfg.FailoverEnabled() {
+		return g.cfg.Providers
+	}
+	return g.cfg.Providers[:1]
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -121,49 +130,96 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta := ParseRequest(requestBody)
+	// Try each provider in order (failover on 5xx/network errors)
+	var meta RequestMeta
+	var resp *http.Response
+	var totalDuration time.Duration
+	var lastErr error
 
-	if g.cfg.Verbose && len(meta.OriginalBody) > 0 {
-		logInfo("Request Body: %s", string(meta.OriginalBody))
+	for i, provider := range g.failoverProviders() {
+		meta, err = AnalyzeRequest(r.URL.Path, requestBody, provider)
+		if err != nil {
+			logError("failed to analyze request: %v", err)
+			meta = RequestMeta{EffectiveBody: requestBody}
+		}
+
+		// Cache lookup on primary provider only
+		if i == 0 {
+			if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
+				logInfo("Request Body: %s", string(meta.EffectiveBody))
+			}
+			if canUseCache(r, meta, g.cfg.Cache) {
+				cached, cacheErr := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxAge)
+				if cacheErr != nil {
+					logError("cache lookup failed: %v", cacheErr)
+				}
+				if cached != nil {
+					requestLog := RequestLog{
+						ID:          newRequestID(),
+						CreatedAt:   startedAt,
+						Path:        r.URL.Path,
+						Model:       meta.EffectiveModel,
+						CacheKey:    meta.CacheKey,
+						RequestBody: g.requestBodyForStorage(meta),
+					}
+					g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
+					return
+				}
+			}
+		}
+
+		resp, totalDuration, lastErr = g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
+		if lastErr == nil && resp.StatusCode < 500 {
+			if i > 0 {
+				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
+			}
+			break
+		}
+
+		// Failed — clean up and try next
+		if resp != nil {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("provider[%d] returned %d", i, resp.StatusCode)
+			resp = nil
+		}
+		if i < len(g.failoverProviders())-1 {
+			logInfo("failover: provider[%d] (%s) failed: %v, trying next", i, provider.BaseURL, lastErr)
+		}
 	}
 
 	requestLog := RequestLog{
-		ID:        newRequestID(),
-		CreatedAt: startedAt,
-		Path:      r.URL.Path,
+		ID:          newRequestID(),
+		CreatedAt:   startedAt,
+		Path:        r.URL.Path,
+		Model:       meta.EffectiveModel,
+		CacheKey:    meta.CacheKey,
+		RequestBody: g.requestBodyForStorage(meta),
 	}
 
-	fwd := g.forwardWithFailover(r, meta, &requestLog)
-
-	if fwd.Cached != nil {
-		g.serveCachedResponse(w, r, startedAt, requestLog, fwd.Cached, meta.Stream)
-		return
-	}
-
-	if fwd.Err != nil {
-		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, fwd.Duration.Seconds(), fwd.Err)
+	if resp == nil {
+		logError("[%s] all providers failed (%.3fs): %v", requestLog.ID, totalDuration.Seconds(), lastErr)
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
-			DurationMS: fwd.Duration.Milliseconds(),
+			DurationMS: totalDuration.Milliseconds(),
 		}, nil)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
 
 	if meta.Stream {
-		g.proxyStream(w, r, meta, requestLog, fwd)
+		g.proxyStream(w, r, meta, requestLog, resp, totalDuration)
 		return
 	}
-	defer fwd.Resp.Body.Close()
+	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(fwd.Resp.Body)
+	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logError("[%s] failed to read upstream response: %v", requestLog.ID, err)
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
-			DurationMS: fwd.Duration.Milliseconds(),
+			DurationMS: totalDuration.Milliseconds(),
 		}, nil)
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -178,40 +234,34 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logError("[%s] usage extraction failed: %v", requestLog.ID, err)
 	}
 
-	storedResponseBody := responseBody
-	if !g.cfg.Logging.LogResponseBody && !canStoreCachedResponse(r, requestLog.CacheKey, meta, fwd.Resp.StatusCode, responseBody, g.cfg.Cache) {
-		storedResponseBody = nil
-	}
-
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
-		StatusCode:   fwd.Resp.StatusCode,
-		ResponseBody: storedResponseBody,
-		DurationMS:   fwd.Duration.Milliseconds(),
+		StatusCode:   resp.StatusCode,
+		ResponseBody: g.responseBodyForStorage(r, meta, resp.StatusCode, responseBody),
+		DurationMS:   totalDuration.Milliseconds(),
 	}
 	g.saveExchange(requestLog, responseLog, usage)
 
-	copyResponseHeaders(w.Header(), fwd.Resp.Header)
-	w.WriteHeader(fwd.Resp.StatusCode)
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(responseBody); err != nil {
 		logError("[%s] write response failed: %v", requestLog.ID, err)
 	}
 
-	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, fwd.Resp.StatusCode, r.Method, r.URL.String(), fwd.Duration.Seconds())
+	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), totalDuration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, fwd forwardResult) {
-	defer fwd.Resp.Body.Close()
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, resp *http.Response, duration time.Duration) {
+	defer resp.Body.Close()
 
-	copyResponseHeaders(w.Header(), fwd.Resp.Header)
-	w.WriteHeader(fwd.Resp.StatusCode)
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
 	usageExtractor := NewSSEUsageExtractor(requestLog.ID)
 	var captured *bytes.Buffer
 	var limit int64
-	shouldCapture := g.cfg.Logging.LogResponseBody || g.cfg.Verbose || (g.cfg.Cache.Enable && requestLog.CacheKey != "")
-	if shouldCapture {
+	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose || canUseCache(r, meta, g.cfg.Cache) {
 		captured = &bytes.Buffer{}
 		if g.cfg.Logging.LogResponseBody || g.cfg.Verbose {
 			limit = 0 // No limit for logging/verbose
@@ -224,7 +274,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 
 	var readFailed bool
 	for {
-		n, readErr := fwd.Resp.Body.Read(buffer)
+		n, readErr := resp.Body.Read(buffer)
 		if n > 0 {
 			chunk := buffer[:n]
 			if _, err := w.Write(chunk); err != nil {
@@ -255,7 +305,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		}
 	}
 
-	elapsed := fwd.Duration
+	elapsed := duration
 	if total := time.Since(requestLog.CreatedAt); total > elapsed {
 		elapsed = total
 	}
@@ -275,20 +325,17 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		capturedBytes = captured.Bytes()
 	}
 
-	statusCode := fwd.Resp.StatusCode
+	statusCode := resp.StatusCode
 	if readFailed {
 		statusCode = http.StatusBadGateway
 	}
 
-	storedResponseBody := capturedBytes
-	if !g.cfg.Logging.LogResponseBody && !canStoreCachedResponse(r, requestLog.CacheKey, meta, statusCode, capturedBytes, g.cfg.Cache) {
-		storedResponseBody = nil
-	}
+	responseBody := g.responseBodyForStorage(r, meta, statusCode, capturedBytes)
 
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
 		StatusCode:   statusCode,
-		ResponseBody: storedResponseBody,
+		ResponseBody: responseBody,
 		DurationMS:   elapsed.Milliseconds(),
 	}
 	g.saveExchange(requestLog, responseLog, usageExtractor.Usage())
@@ -445,7 +492,7 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
-	resp, duration, err := g.forwardUpstream(r, r.Body, g.providers[0])
+	resp, duration, err := g.forwardUpstream(r, r.Body, g.primaryProvider())
 	if err != nil {
 		logError("passthrough upstream request failed: %v", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
@@ -464,69 +511,6 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type forwardResult struct {
-	Resp     *http.Response
-	Cached   *CachedResponse
-	Err      error
-	Duration time.Duration
-}
-
-// forwardWithFailover prepares the request for each provider, checks cache (primary only),
-// and tries upstream in order. It fills requestLog with the final provider's info.
-func (g *Gateway) forwardWithFailover(r *http.Request, meta RequestMeta, requestLog *RequestLog) forwardResult {
-	providers := g.providers
-	if !g.cfg.FailoverEnabled() {
-		providers = providers[:1]
-	}
-
-	var lastErr error
-	var totalDuration time.Duration
-
-	for i, provider := range providers {
-		body, cacheKey, model := PrepareForProvider(r.URL.Path, meta, provider)
-		requestLog.Model = model
-		requestLog.CacheKey = cacheKey
-		if g.cfg.Logging.LogRequestBody {
-			requestLog.RequestBody = body
-		}
-
-		// Cache lookup for primary provider only
-		if i == 0 && g.cfg.Cache.Enable && cacheKey != "" && r.Method == http.MethodPost {
-			cached, err := g.storage.FindCachedResponse(cacheKey, g.cfg.Cache.MaxAge)
-			if err != nil {
-				logError("cache lookup failed: %v", err)
-			}
-			if cached != nil {
-				return forwardResult{Cached: cached}
-			}
-		}
-
-		resp, duration, err := g.forwardUpstream(r, bytes.NewReader(body), provider)
-		totalDuration += duration
-
-		if err == nil && resp.StatusCode < 500 {
-			if i > 0 {
-				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
-			}
-			return forwardResult{Resp: resp, Duration: totalDuration}
-		}
-
-		if resp != nil {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("provider[%d] returned %d", i, resp.StatusCode)
-		} else {
-			lastErr = err
-		}
-
-		if i < len(providers)-1 {
-			logInfo("failover: provider[%d] (%s) failed: %v, trying provider[%d] (%s)",
-				i, provider.BaseURL, lastErr, i+1, providers[i+1].BaseURL)
-		}
-	}
-
-	return forwardResult{Duration: totalDuration, Err: fmt.Errorf("all %d providers failed, last: %w", len(providers), lastErr)}
-}
-
 func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {
 	targetURL, err := buildUpstreamURL(provider.BaseURL, r.URL)
 	if err != nil {
@@ -539,7 +523,7 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider Prov
 	}
 
 	g.copyRequestHeaders(upstreamRequest.Header, r.Header, provider)
-	applyProviderHeaders(upstreamRequest.Header, provider)
+	g.applyProviderHeaders(upstreamRequest.Header, provider)
 
 	startedAt := time.Now()
 	resp, err := g.client.Do(upstreamRequest)
@@ -551,7 +535,7 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider Prov
 	return resp, duration, nil
 }
 
-func applyProviderHeaders(headers http.Header, provider ProviderConfig) {
+func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderConfig) {
 	// 1. Always clear the client's standard Authorization
 	headers.Del(authHeaderName)
 
@@ -598,7 +582,7 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConf
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if isProviderHeader(key, provider) {
+		if g.isProviderHeader(key, provider) {
 			continue
 		}
 		if strings.EqualFold(key, "Accept-Encoding") {
@@ -611,7 +595,7 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConf
 	}
 }
 
-func isProviderHeader(key string, provider ProviderConfig) bool {
+func (g *Gateway) isProviderHeader(key string, provider ProviderConfig) bool {
 	if strings.EqualFold(key, authHeaderName) {
 		return true
 	}
@@ -645,6 +629,20 @@ func isHopByHopHeader(header string) bool {
 	default:
 		return false
 	}
+}
+
+func (g *Gateway) requestBodyForStorage(meta RequestMeta) []byte {
+	if !g.cfg.Logging.LogRequestBody {
+		return nil
+	}
+	return meta.EffectiveBody
+}
+
+func (g *Gateway) responseBodyForStorage(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte) []byte {
+	if g.cfg.Logging.LogResponseBody || canStoreCachedResponse(r, meta, statusCode, responseBody, g.cfg.Cache) {
+		return responseBody
+	}
+	return nil
 }
 
 func (g *Gateway) cachedResponseBodyForStorage(responseBody []byte) []byte {

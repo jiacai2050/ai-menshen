@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"hash"
 	"io"
 	"sort"
@@ -21,20 +22,27 @@ var (
 	}
 )
 
-func ParseRequest(body []byte) RequestMeta {
+func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestMeta, error) {
 	meta := RequestMeta{
-		OriginalBody: body,
+		EffectiveBody: body,
 	}
 
 	if len(body) == 0 {
-		return meta
+		return meta, nil
 	}
 
 	payload, ok := decodeJSONObject(body)
 	if !ok {
-		return meta
+		return meta, nil
 	}
-	meta.Payload = payload
+
+	needsMarshal := false
+	if provider.Model != "" {
+		if current, ok := payload["model"].(string); !ok || current != provider.Model {
+			payload["model"] = provider.Model
+			needsMarshal = true
+		}
+	}
 
 	if model, ok := payload["model"].(string); ok {
 		meta.EffectiveModel = model
@@ -49,40 +57,25 @@ func ParseRequest(body []byte) RequestMeta {
 			payload["stream_options"] = map[string]any{
 				"include_usage": true,
 			}
+			needsMarshal = true
 		}
 	}
 
-	return meta
-}
-
-// PrepareForProvider applies model override and builds cache key for a specific provider.
-// Returns the marshaled request body, cache key, and effective model.
-// Does not modify meta.Payload.
-func PrepareForProvider(path string, meta RequestMeta, provider ProviderConfig) (body []byte, cacheKey string, model string) {
-	if meta.Payload == nil {
-		return meta.OriginalBody, "", meta.EffectiveModel
-	}
-
-	payload := meta.Payload
-	model = meta.EffectiveModel
-
-	if provider.Model != "" && provider.Model != model {
-		// Clone to avoid mutating the shared map
-		payload = make(map[string]any, len(meta.Payload))
-		for k, v := range meta.Payload {
-			payload[k] = v
+	if needsMarshal {
+		effectiveBody, err := json.Marshal(payload)
+		if err != nil {
+			return meta, fmt.Errorf("marshal effective request body: %w", err)
 		}
-		payload["model"] = provider.Model
-		model = provider.Model
+		meta.EffectiveBody = effectiveBody
 	}
 
-	cacheKey, _ = buildCacheKey(path, payload)
-
-	body, err := json.Marshal(payload)
+	cacheKey, err := buildCacheKey(path, payload)
 	if err != nil {
-		return meta.OriginalBody, cacheKey, model
+		return meta, fmt.Errorf("build cache key: %w", err)
 	}
-	return body, cacheKey, model
+	meta.CacheKey = cacheKey
+
+	return meta, nil
 }
 
 func decodeJSONObject(body []byte) (map[string]any, bool) {
