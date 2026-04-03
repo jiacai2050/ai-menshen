@@ -35,6 +35,14 @@ type ProviderConfig struct {
 	APIKey  string            `toml:"api_key"`
 	Headers map[string]string `toml:"headers"`
 	Model   string            `toml:"model"`
+	Weight  *int              `toml:"weight"`
+}
+
+func (p ProviderConfig) GetWeight() int {
+	if p.Weight == nil {
+		return 1
+	}
+	return *p.Weight
 }
 
 type UpstreamConfig struct {
@@ -161,6 +169,10 @@ func LoadConfig(path string) (Config, error) {
 		}
 
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
+
+		if cfg.Providers[i].Weight != nil && *cfg.Providers[i].Weight < 0 {
+			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)
+		}
 	}
 
 	expandedSQLitePath := strings.TrimSpace(os.ExpandEnv(cfg.Storage.SQLite.Path))
@@ -170,8 +182,4 @@ func LoadConfig(path string) (Config, error) {
 	cfg.Storage.SQLite.Path = expandedSQLitePath
 
 	return cfg, nil
-}
-
-func (c Config) PrimaryProvider() ProviderConfig {
-	return c.Providers[0]
 }

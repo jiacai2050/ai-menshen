@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,23 +27,71 @@ const (
 )
 
 type Gateway struct {
-	cfg      Config
-	provider ProviderConfig
-	storage  *Storage
-	client   *http.Client
+	cfg     Config
+	storage *Storage
+	client  *http.Client
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
-	provider := cfg.PrimaryProvider()
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	service := &Gateway{
-		cfg:      cfg,
-		provider: provider,
-		storage:  storage,
-		client:   &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
+		cfg:     cfg,
+		storage: storage,
+		client:  &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
 	}
 
 	return service, nil
+}
+
+func (g *Gateway) primaryProvider() ProviderConfig {
+	return g.cfg.Providers[0]
+}
+
+// pickProviders returns providers ordered for this request: a weighted-random
+// primary followed by the remaining active providers as failover candidates.
+// Providers with weight=0 are excluded entirely.
+func (g *Gateway) pickProviders() []ProviderConfig {
+	// Filter out weight=0 providers
+	var active []ProviderConfig
+	for _, p := range g.cfg.Providers {
+		if p.GetWeight() > 0 {
+			active = append(active, p)
+		}
+	}
+	if len(active) == 0 {
+		return g.cfg.Providers[:1] // fallback: shouldn't happen with valid config
+	}
+	if len(active) == 1 {
+		return active
+	}
+
+	primary := weightedPick(active)
+
+	// Put selected primary first, rest follow in original order
+	result := make([]ProviderConfig, 0, len(active))
+	result = append(result, active[primary])
+	for i, p := range active {
+		if i != primary {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// weightedPick returns the index of a randomly selected provider based on weights.
+func weightedPick(providers []ProviderConfig) int {
+	total := 0
+	for _, p := range providers {
+		total += p.GetWeight()
+	}
+	r := mrand.IntN(total)
+	for i, p := range providers {
+		r -= p.GetWeight()
+		if r < 0 {
+			return i
+		}
+	}
+	return 0
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,19 +171,64 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := AnalyzeRequest(r.URL.Path, requestBody, g.provider)
-	if err != nil {
-		logError("failed to analyze request: %v", err)
-		// Fallback to original body and default meta
-		meta = RequestMeta{
-			EffectiveBody: requestBody,
+	// Try each provider in order (failover on 5xx/network errors)
+	var meta RequestMeta
+	var resp *http.Response
+	var lastErr error
+	providers := g.pickProviders()
+
+	for i, provider := range providers {
+		meta, err = AnalyzeRequest(r.URL.Path, requestBody, provider)
+		if err != nil {
+			logError("failed to analyze request: %v", err)
+			meta = RequestMeta{EffectiveBody: requestBody}
+		}
+
+		// Cache lookup on primary provider only
+		if i == 0 {
+			if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
+				logInfo("Request Body: %s", string(meta.EffectiveBody))
+			}
+			if canUseCache(r, meta, g.cfg.Cache) {
+				cached, cacheErr := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxAge)
+				if cacheErr != nil {
+					logError("cache lookup failed: %v", cacheErr)
+				}
+				if cached != nil {
+					requestLog := RequestLog{
+						ID:          newRequestID(),
+						CreatedAt:   startedAt,
+						Path:        r.URL.Path,
+						Model:       meta.EffectiveModel,
+						CacheKey:    meta.CacheKey,
+						RequestBody: g.requestBodyForStorage(meta),
+					}
+					g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
+					return
+				}
+			}
+		}
+
+		resp, _, lastErr = g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
+		if lastErr == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			if i > 0 {
+				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
+			}
+			break
+		}
+
+		// Failed — clean up and try next
+		if resp != nil {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("provider[%d] returned %d", i, resp.StatusCode)
+			resp = nil
+		}
+		if i < len(providers)-1 {
+			logInfo("failover: provider[%d] (%s) failed: %v, trying next", i, provider.BaseURL, lastErr)
 		}
 	}
 
-	if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
-		logInfo("Request Body: %s", string(meta.EffectiveBody))
-	}
-
+	duration := time.Since(startedAt)
 	requestLog := RequestLog{
 		ID:          newRequestID(),
 		CreatedAt:   startedAt,
@@ -144,31 +238,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestBody: g.requestBodyForStorage(meta),
 	}
 
-	if canUseCache(r, meta, g.cfg.Cache) {
-		cached, err := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxAge)
-		if err != nil {
-			logError("cache lookup failed: %v", err)
-		}
-		if cached != nil {
-			g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
-			return
-		}
-	}
-
-	if meta.Stream {
-		g.proxyStream(w, r, meta, requestLog)
-		return
-	}
-
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
-	if err != nil {
-		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
+	if resp == nil {
+		logError("[%s] all providers failed (%.3fs): %v", requestLog.ID, duration.Seconds(), lastErr)
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
 			DurationMS: duration.Milliseconds(),
 		}, nil)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+
+	if meta.Stream {
+		g.proxyStream(w, r, meta, requestLog, resp)
 		return
 	}
 	defer resp.Body.Close()
@@ -211,18 +293,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog) {
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
-	if err != nil {
-		logError("[%s] stream upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
-		g.saveExchange(requestLog, ResponseLog{
-			RequestID:  requestLog.ID,
-			StatusCode: http.StatusBadGateway,
-			DurationMS: duration.Milliseconds(),
-		}, nil)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, resp *http.Response) {
 	defer resp.Body.Close()
 
 	copyResponseHeaders(w.Header(), resp.Header)
@@ -276,10 +347,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 		}
 	}
 
-	elapsed := duration
-	if total := time.Since(requestLog.CreatedAt); total > elapsed {
-		elapsed = total
-	}
+	elapsed := time.Since(requestLog.CreatedAt)
 
 	if err := usageExtractor.Finalize(); err != nil {
 		logError("[%s] stream usage extraction failed: %v", requestLog.ID, err)
@@ -463,7 +531,7 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
-	resp, duration, err := g.forwardUpstream(r, r.Body)
+	resp, duration, err := g.forwardUpstream(r, r.Body, g.primaryProvider())
 	if err != nil {
 		logError("passthrough upstream request failed: %v", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
@@ -482,8 +550,8 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Response, time.Duration, error) {
-	targetURL, err := buildUpstreamURL(g.provider.BaseURL, r.URL)
+func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {
+	targetURL, err := buildUpstreamURL(provider.BaseURL, r.URL)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -493,8 +561,8 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Respon
 		return nil, 0, fmt.Errorf("create upstream request: %w", err)
 	}
 
-	g.copyRequestHeaders(upstreamRequest.Header, r.Header)
-	g.applyProviderHeaders(upstreamRequest.Header)
+	g.copyRequestHeaders(upstreamRequest.Header, r.Header, provider)
+	g.applyProviderHeaders(upstreamRequest.Header, provider)
 
 	startedAt := time.Now()
 	resp, err := g.client.Do(upstreamRequest)
@@ -506,17 +574,17 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Respon
 	return resp, duration, nil
 }
 
-func (g *Gateway) applyProviderHeaders(headers http.Header) {
+func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderConfig) {
 	// 1. Always clear the client's standard Authorization
 	headers.Del(authHeaderName)
 
 	// 2. Apply APIKey if present
-	if g.provider.APIKey != "" {
-		headers.Set(authHeaderName, "Bearer "+g.provider.APIKey)
+	if provider.APIKey != "" {
+		headers.Set(authHeaderName, "Bearer "+provider.APIKey)
 	}
 
 	// 3. Apply custom headers (can override Authorization if specified)
-	for k, v := range g.provider.Headers {
+	for k, v := range provider.Headers {
 		headers.Set(k, v)
 	}
 }
@@ -548,12 +616,12 @@ func joinURLPath(basePath, requestPath string) string {
 	}
 }
 
-func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
+func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConfig) {
 	for key, values := range src {
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if g.isProviderHeader(key) {
+		if g.isProviderHeader(key, provider) {
 			continue
 		}
 		if strings.EqualFold(key, "Accept-Encoding") {
@@ -566,11 +634,11 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
 	}
 }
 
-func (g *Gateway) isProviderHeader(key string) bool {
+func (g *Gateway) isProviderHeader(key string, provider ProviderConfig) bool {
 	if strings.EqualFold(key, authHeaderName) {
 		return true
 	}
-	for k := range g.provider.Headers {
+	for k := range provider.Headers {
 		if strings.EqualFold(key, k) {
 			return true
 		}
