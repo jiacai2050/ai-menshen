@@ -169,7 +169,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp, _, lastErr = g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
-if lastErr == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+		if lastErr == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
 			if i > 0 {
 				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
 			}
