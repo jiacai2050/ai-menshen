@@ -170,10 +170,7 @@ func LoadConfig(path string) (Config, error) {
 
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
 
-		if cfg.Providers[i].Weight == nil {
-			defaultWeight := 1
-			cfg.Providers[i].Weight = &defaultWeight
-		} else if *cfg.Providers[i].Weight < 0 {
+		if cfg.Providers[i].Weight != nil && *cfg.Providers[i].Weight < 0 {
 			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)
 		}
 	}

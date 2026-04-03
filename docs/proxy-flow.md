@@ -18,13 +18,14 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    AUDIT[ReadAll body] --> LOOP["For each provider (failover)"]
+    AUDIT[ReadAll body] --> PICK["pickProviders()<br/>weighted-random primary + failover order"]
+    PICK --> LOOP["For each provider"]
 
     LOOP --> ANALYZE["AnalyzeRequest(body, provider)<br/>model override + stream_options + cache key"]
     ANALYZE --> CACHE{Cache hit?<br/>primary only}
     CACHE -->|Yes| R1[serveCachedResponse]
     CACHE -->|No| UPSTREAM["forwardUpstream(provider)"]
-    UPSTREAM --> OK{Status < 500?}
+    UPSTREAM --> OK{Status < 500<br/>and not 429?}
     OK -->|Yes| RESP[Got response]
     OK -->|No| NEXT{More providers?}
     NEXT -->|Yes| LOOP
@@ -37,14 +38,23 @@ flowchart TD
     R4 --> SAVE
 ```
 
+### Provider selection
+
+`pickProviders()` builds the provider list for each request:
+
+1. Filter out providers with `weight = 0` (disabled).
+2. `weightedPick()` — select a primary provider randomly, proportional to weights.
+3. Return primary first, remaining active providers follow as failover candidates.
+4. Single active provider → no allocation, returned directly.
+
 ### Failover loop
 
-Iterates `failoverProviders()` (single provider if failover disabled). For each provider:
+For each provider in the list:
 
 1. `AnalyzeRequest` — applies model override, injects `stream_options`, builds cache key, marshals body.
 2. Cache lookup (primary provider only, i == 0) — hit returns immediately.
 3. `forwardUpstream` — builds URL, injects provider auth/headers, sends request.
-4. Status < 500 → break with success. 5xx/error → close body, try next provider.
+4. Status < 500 and not 429 → break with success. Otherwise → close body, try next provider.
 
 ### Response handling
 
@@ -56,5 +66,6 @@ After the loop, `ServeHTTP` checks the result:
 ## Design Principles
 
 - **`AnalyzeRequest` is idempotent** — called per provider attempt, no shared state mutation
-- **Failover is a simple loop** — no extra structs or abstractions
+- **Weighted load balancing + automatic failover** — single mechanism, no separate config toggle
 - **`proxyStream` receives an already-established `resp`** — failover happens before streaming begins
+- **Duration uses `time.Since(startedAt)`** — reflects true user-perceived latency across all attempts
