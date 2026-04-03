@@ -84,13 +84,13 @@ func run(configPath string) error {
 
 	log.Printf("ai-menshen started on %s", cfg.Listen)
 	for i, p := range cfg.Providers {
-		log.Printf("  provider[%d]: %s", i, p.BaseURL)
+		log.Printf("  provider[%d]: %s (weight=%d)", i, p.BaseURL, p.GetWeight())
 		if p.Model != "" {
 			log.Printf("  provider[%d] model override: %s", i, p.Model)
 		}
 	}
-	if cfg.FailoverEnabled() {
-		log.Printf("Failover enabled across %d providers", len(cfg.Providers))
+	if len(cfg.Providers) > 1 {
+		log.Printf("Load balancing across %d providers (with failover)", len(cfg.Providers))
 	}
 
 	server := &http.Server{

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -46,11 +47,51 @@ func (g *Gateway) primaryProvider() ProviderConfig {
 	return g.cfg.Providers[0]
 }
 
-func (g *Gateway) failoverProviders() []ProviderConfig {
-	if g.cfg.FailoverEnabled() {
-		return g.cfg.Providers
+// pickProviders returns providers ordered for this request: a weighted-random
+// primary followed by the remaining active providers as failover candidates.
+// Providers with weight=0 are excluded entirely.
+func (g *Gateway) pickProviders() []ProviderConfig {
+	// Filter out weight=0 providers
+	var active []ProviderConfig
+	for _, p := range g.cfg.Providers {
+		if p.GetWeight() > 0 {
+			active = append(active, p)
+		}
 	}
-	return g.cfg.Providers[:1]
+	if len(active) == 0 {
+		return g.cfg.Providers[:1] // fallback: shouldn't happen with valid config
+	}
+	if len(active) == 1 {
+		return active
+	}
+
+	primary := weightedPick(active)
+
+	// Put selected primary first, rest follow in original order
+	result := make([]ProviderConfig, 0, len(active))
+	result = append(result, active[primary])
+	for i, p := range active {
+		if i != primary {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// weightedPick returns the index of a randomly selected provider based on weights.
+func weightedPick(providers []ProviderConfig) int {
+	total := 0
+	for _, p := range providers {
+		total += p.GetWeight()
+	}
+	r := mrand.IntN(total)
+	for i, p := range providers {
+		r -= p.GetWeight()
+		if r < 0 {
+			return i
+		}
+	}
+	return 0
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +175,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var meta RequestMeta
 	var resp *http.Response
 	var lastErr error
-	providers := g.failoverProviders()
+	providers := g.pickProviders()
 
 	for i, provider := range providers {
 		meta, err = AnalyzeRequest(r.URL.Path, requestBody, provider)
