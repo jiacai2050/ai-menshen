@@ -44,8 +44,8 @@ Important fields:
   - `base_url`: upstream OpenAI-compatible base URL
   - `api_key`: upstream API key
   - `model`: optional model override for forwarded requests
-  - `weight`: optional request-distribution weight; defaults to `1`, `0` disables the provider
-- `storage.sqlite_path`: SQLite database path
+  - `weight`: request-distribution weight; if omitted it is treated as `0`, and `0` disables the provider. At least one provider must have a weight greater than `0`.
+- `storage.sqlite.path`: SQLite database path
 - `cache.enable`: enables non-stream cache replay
 - `cache.max_body_bytes`: maximum cached response body size
 - `logging.log_request_body`: whether to store request bodies
