@@ -6,9 +6,9 @@ This project is a lightweight OpenAI-compatible proxy service written in Go.
 
 ai-menshen now does more than basic auth injection:
 
-- forwards OpenAI-compatible requests to a configured upstream provider
+- forwards OpenAI-compatible requests to one configured upstream provider chosen per request
 - keeps the real upstream API key in a local TOML config file
-- optionally overrides the client `model` with `providers[0].model`
+- optionally overrides the client `model` with the selected provider's `model`
 - records both non-stream and stream requests and responses in SQLite
 - extracts token usage from normal JSON responses and stream SSE events when `usage` is present
 - optionally reuses matching cached non-stream responses
@@ -40,10 +40,11 @@ The binary entrypoint supports a minimal CLI:
 Important fields:
 
 - `listen`: local listen address
-- `providers`: provider array; the current implementation only uses the first item
+- `providers`: provider array; one provider is selected per request using weight
   - `base_url`: upstream OpenAI-compatible base URL
   - `api_key`: upstream API key
   - `model`: optional model override for forwarded requests
+  - `weight`: optional request-distribution weight; defaults to `1`, `0` disables the provider
 - `storage.sqlite_path`: SQLite database path
 - `cache.enable`: enables non-stream cache replay
 - `cache.max_body_bytes`: maximum cached response body size

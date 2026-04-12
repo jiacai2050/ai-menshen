@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,23 +27,50 @@ const (
 )
 
 type Gateway struct {
-	cfg      Config
-	provider ProviderConfig
-	storage  *Storage
-	client   *http.Client
+	cfg     Config
+	storage *Storage
+	client  *http.Client
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
-	provider := cfg.PrimaryProvider()
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	service := &Gateway{
-		cfg:      cfg,
-		provider: provider,
-		storage:  storage,
-		client:   &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
+		cfg:     cfg,
+		storage: storage,
+		client:  &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
 	}
 
 	return service, nil
+}
+
+func (g *Gateway) pickProvider() ProviderConfig {
+	var active []ProviderConfig
+	for _, provider := range g.cfg.Providers {
+		if provider.GetWeight() > 0 {
+			active = append(active, provider)
+		}
+	}
+	if len(active) == 1 {
+		return active[0]
+	}
+	return active[weightedPick(active)]
+}
+
+func weightedPick(providers []ProviderConfig) int {
+	totalWeight := 0
+	for _, provider := range providers {
+		totalWeight += provider.GetWeight()
+	}
+
+	pick := mrand.IntN(totalWeight)
+	for i, provider := range providers {
+		pick -= provider.GetWeight()
+		if pick < 0 {
+			return i
+		}
+	}
+
+	return len(providers) - 1
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +150,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := AnalyzeRequest(r.URL.Path, requestBody, g.provider)
+	provider := g.pickProvider()
+
+	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider)
 	if err != nil {
 		logError("failed to analyze request: %v", err)
 		// Fallback to original body and default meta
@@ -156,11 +186,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if meta.Stream {
-		g.proxyStream(w, r, meta, requestLog)
+		g.proxyStream(w, r, meta, requestLog, provider)
 		return
 	}
 
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
 	if err != nil {
 		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
@@ -211,8 +241,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog) {
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, provider ProviderConfig) {
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
 	if err != nil {
 		logError("[%s] stream upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
@@ -463,7 +493,8 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
-	resp, duration, err := g.forwardUpstream(r, r.Body)
+	provider := g.pickProvider()
+	resp, duration, err := g.forwardUpstream(r, r.Body, provider)
 	if err != nil {
 		logError("passthrough upstream request failed: %v", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
@@ -482,8 +513,8 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Response, time.Duration, error) {
-	targetURL, err := buildUpstreamURL(g.provider.BaseURL, r.URL)
+func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {
+	targetURL, err := buildUpstreamURL(provider.BaseURL, r.URL)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -493,8 +524,8 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Respon
 		return nil, 0, fmt.Errorf("create upstream request: %w", err)
 	}
 
-	g.copyRequestHeaders(upstreamRequest.Header, r.Header)
-	g.applyProviderHeaders(upstreamRequest.Header)
+	g.copyRequestHeaders(upstreamRequest.Header, r.Header, provider)
+	g.applyProviderHeaders(upstreamRequest.Header, provider)
 
 	startedAt := time.Now()
 	resp, err := g.client.Do(upstreamRequest)
@@ -506,17 +537,17 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Respon
 	return resp, duration, nil
 }
 
-func (g *Gateway) applyProviderHeaders(headers http.Header) {
+func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderConfig) {
 	// 1. Always clear the client's standard Authorization
 	headers.Del(authHeaderName)
 
 	// 2. Apply APIKey if present
-	if g.provider.APIKey != "" {
-		headers.Set(authHeaderName, "Bearer "+g.provider.APIKey)
+	if provider.APIKey != "" {
+		headers.Set(authHeaderName, "Bearer "+provider.APIKey)
 	}
 
 	// 3. Apply custom headers (can override Authorization if specified)
-	for k, v := range g.provider.Headers {
+	for k, v := range provider.Headers {
 		headers.Set(k, v)
 	}
 }
@@ -548,12 +579,12 @@ func joinURLPath(basePath, requestPath string) string {
 	}
 }
 
-func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
+func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConfig) {
 	for key, values := range src {
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if g.isProviderHeader(key) {
+		if g.isProviderHeader(key, provider) {
 			continue
 		}
 		if strings.EqualFold(key, "Accept-Encoding") {
@@ -566,11 +597,11 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
 	}
 }
 
-func (g *Gateway) isProviderHeader(key string) bool {
+func (g *Gateway) isProviderHeader(key string, provider ProviderConfig) bool {
 	if strings.EqualFold(key, authHeaderName) {
 		return true
 	}
-	for k := range g.provider.Headers {
+	for k := range provider.Headers {
 		if strings.EqualFold(key, k) {
 			return true
 		}

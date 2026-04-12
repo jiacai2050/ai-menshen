@@ -35,6 +35,11 @@ type ProviderConfig struct {
 	APIKey  string            `toml:"api_key"`
 	Headers map[string]string `toml:"headers"`
 	Model   string            `toml:"model"`
+	Weight  int               `toml:"weight"`
+}
+
+func (p ProviderConfig) GetWeight() int {
+	return p.Weight
 }
 
 type UpstreamConfig struct {
@@ -141,6 +146,7 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, fmt.Errorf("config.providers must contain at least one provider")
 	}
 
+	hasPositiveWeight := false
 	for i, provider := range cfg.Providers {
 		cfg.Providers[i].APIKey = os.ExpandEnv(provider.APIKey)
 		if len(provider.Headers) > 0 {
@@ -161,6 +167,17 @@ func LoadConfig(path string) (Config, error) {
 		}
 
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
+
+		if cfg.Providers[i].Weight < 0 {
+			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)
+		}
+		if cfg.Providers[i].GetWeight() > 0 {
+			hasPositiveWeight = true
+		}
+	}
+
+	if !hasPositiveWeight {
+		return cfg, fmt.Errorf("config.providers must contain at least one provider with positive weight")
 	}
 
 	expandedSQLitePath := strings.TrimSpace(os.ExpandEnv(cfg.Storage.SQLite.Path))
@@ -170,8 +187,4 @@ func LoadConfig(path string) (Config, error) {
 	cfg.Storage.SQLite.Path = expandedSQLitePath
 
 	return cfg, nil
-}
-
-func (c Config) PrimaryProvider() ProviderConfig {
-	return c.Providers[0]
 }

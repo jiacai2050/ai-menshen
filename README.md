@@ -173,6 +173,7 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `api_key` | Upstream key | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |
+| | `weight` | Weighted request share (`0` disables the provider; startup fails if all are `0`) | `0` |
 | **Upstream** | `timeout` | Upstream request timeout (seconds) | `300` (5 min) |
 | **Storage** | `retention_days` | Automatically purge logs older than X days | `90` |
 | **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
