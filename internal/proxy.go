@@ -64,11 +64,11 @@ func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
 	activeProviders := make([]ProviderConfig, 0, len(providers))
 	totalWeight := 0
 	for _, provider := range providers {
-		if provider.GetWeight() <= 0 {
+		if provider.Weight <= 0 {
 			continue
 		}
 		activeProviders = append(activeProviders, provider)
-		totalWeight += provider.GetWeight()
+		totalWeight += provider.Weight
 	}
 
 	return activeProviders, totalWeight
@@ -81,7 +81,7 @@ func (g *Gateway) pickProvider() ProviderConfig {
 
 	pick := mrand.IntN(g.activeTotalWeight)
 	for _, provider := range g.activeProviders {
-		pick -= provider.GetWeight()
+		pick -= provider.Weight
 		if pick < 0 {
 			return provider
 		}

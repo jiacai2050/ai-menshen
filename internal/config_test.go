@@ -18,8 +18,8 @@ weight = 2
 path = "./test.db"
 `)
 
-	if got := cfg.Providers[0].GetWeight(); got != 2 {
-		t.Fatalf("GetWeight() = %d, want 2", got)
+	if got := cfg.Providers[0].Weight; got != 2 {
+		t.Fatalf("Weight = %d, want 2", got)
 	}
 }
 

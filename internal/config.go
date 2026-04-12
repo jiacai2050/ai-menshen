@@ -38,10 +38,6 @@ type ProviderConfig struct {
 	Weight  int               `toml:"weight"`
 }
 
-func (p ProviderConfig) GetWeight() int {
-	return p.Weight
-}
-
 type UpstreamConfig struct {
 	Timeout int `toml:"timeout"`
 }
@@ -171,7 +167,7 @@ func LoadConfig(path string) (Config, error) {
 		if cfg.Providers[i].Weight < 0 {
 			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)
 		}
-		if cfg.Providers[i].GetWeight() > 0 {
+		if cfg.Providers[i].Weight > 0 {
 			hasPositiveWeight = true
 		}
 	}

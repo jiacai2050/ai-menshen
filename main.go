@@ -84,7 +84,7 @@ func run(configPath string) error {
 
 	log.Printf("ai-menshen started on %s", cfg.Listen)
 	for i, provider := range cfg.Providers {
-		log.Printf("  provider[%d]: %s (weight=%d)", i, provider.BaseURL, provider.GetWeight())
+		log.Printf("  provider[%d]: %s (weight=%d)", i, provider.BaseURL, provider.Weight)
 		if provider.Model != "" {
 			log.Printf("  provider[%d] model override: %s", i, provider.Model)
 		}
