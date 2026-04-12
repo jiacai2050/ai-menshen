@@ -3,7 +3,7 @@
 This document outlines potential features and improvements for **ai-menshen**.
 
 ## 1. Reliability: Multi-Provider Failover
-- **Current State**: Only `providers[0]` is utilized.
+- **Current State**: Requests can already be distributed across multiple providers by weight.
 - **Goal**: Implement automatic failover if the primary provider returns 5xx errors or timeouts.
 - **Benefit**: High availability for users relying on multiple API upstream channels.
 

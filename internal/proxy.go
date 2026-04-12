@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jiacai2050/ai-menshen/internal/web"
@@ -25,24 +27,70 @@ const (
 	reportLogDetailPath = "/__report/log"
 )
 
+var streamBufferPool = sync.Pool{
+	New: func() any {
+		buffer := make([]byte, 16*1024)
+		return &buffer
+	},
+}
+
 type Gateway struct {
-	cfg      Config
-	provider ProviderConfig
-	storage  *Storage
-	client   *http.Client
+	cfg               Config
+	activeProviders   []ProviderConfig
+	activeTotalWeight int
+	storage           *Storage
+	client            *http.Client
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
-	provider := cfg.PrimaryProvider()
+	activeProviders, activeTotalWeight := buildActiveProviders(cfg.Providers)
+	if len(activeProviders) == 0 || activeTotalWeight <= 0 {
+		return nil, fmt.Errorf("gateway requires at least one active provider")
+	}
+
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	service := &Gateway{
-		cfg:      cfg,
-		provider: provider,
-		storage:  storage,
-		client:   &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
+		cfg:               cfg,
+		activeProviders:   activeProviders,
+		activeTotalWeight: activeTotalWeight,
+		storage:           storage,
+		client:            &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
 	}
 
 	return service, nil
+}
+
+func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
+	activeProviders := make([]ProviderConfig, 0, len(providers))
+	totalWeight := 0
+	for _, provider := range providers {
+		if provider.Weight <= 0 {
+			continue
+		}
+		activeProviders = append(activeProviders, provider)
+		totalWeight += provider.Weight
+	}
+
+	return activeProviders, totalWeight
+}
+
+// pickProvider selects from the startup-precomputed active provider set by
+// drawing one random number in [0, totalWeight) and walking the weights until
+// the cumulative range covers that value.
+func (g *Gateway) pickProvider() ProviderConfig {
+	if len(g.activeProviders) == 1 {
+		return g.activeProviders[0]
+	}
+
+	pick := mrand.IntN(g.activeTotalWeight)
+	for _, provider := range g.activeProviders {
+		pick -= provider.Weight
+		if pick < 0 {
+			return provider
+		}
+	}
+
+	return g.activeProviders[len(g.activeProviders)-1]
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +170,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := AnalyzeRequest(r.URL.Path, requestBody, g.provider)
+	provider := g.pickProvider()
+
+	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider)
 	if err != nil {
 		logError("failed to analyze request: %v", err)
 		// Fallback to original body and default meta
@@ -132,7 +182,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
-		logInfo("Request Body: %s", string(meta.EffectiveBody))
+		logInfo("Request Body: %s", meta.EffectiveBody)
 	}
 
 	requestLog := RequestLog{
@@ -156,11 +206,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if meta.Stream {
-		g.proxyStream(w, r, meta, requestLog)
+		g.proxyStream(w, r, meta, requestLog, provider)
 		return
 	}
 
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
 	if err != nil {
 		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
@@ -186,7 +236,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if g.cfg.Verbose && len(responseBody) > 0 {
-		logInfo("Response Body: %s", string(responseBody))
+		logInfo("Response Body: %s", responseBody)
 	}
 
 	usage, err := ExtractUsage(requestLog.ID, responseBody)
@@ -211,8 +261,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog) {
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody))
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta RequestMeta, requestLog RequestLog, provider ProviderConfig) {
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
 	if err != nil {
 		logError("[%s] stream upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
@@ -240,8 +290,9 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 			limit = g.cfg.Cache.MaxBodyBytes
 		}
 	}
-	// Use a fixed sized buffer for streaming to keep memory overhead predictable
-	buffer := make([]byte, 16*1024)
+	bufferPtr := streamBufferPool.Get().(*[]byte)
+	buffer := *bufferPtr
+	defer streamBufferPool.Put(bufferPtr)
 
 	var readFailed bool
 	for {
@@ -287,11 +338,11 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 
 	if captured != nil && captured.Len() > 0 {
 		if g.cfg.Verbose {
-			logInfo("Stream Response Body: %s", captured.String())
+			logInfo("Stream Response Body: %s", captured.Bytes())
 		}
 	}
 
-	capturedBytes := []byte{}
+	var capturedBytes []byte
 	if captured != nil {
 		capturedBytes = captured.Bytes()
 	}
@@ -463,7 +514,8 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
-	resp, duration, err := g.forwardUpstream(r, r.Body)
+	provider := g.pickProvider()
+	resp, duration, err := g.forwardUpstream(r, r.Body, provider)
 	if err != nil {
 		logError("passthrough upstream request failed: %v", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
@@ -482,8 +534,8 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Response, time.Duration, error) {
-	targetURL, err := buildUpstreamURL(g.provider.BaseURL, r.URL)
+func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {
+	targetURL, err := buildUpstreamURL(provider.BaseURL, r.URL)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -493,8 +545,8 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Respon
 		return nil, 0, fmt.Errorf("create upstream request: %w", err)
 	}
 
-	g.copyRequestHeaders(upstreamRequest.Header, r.Header)
-	g.applyProviderHeaders(upstreamRequest.Header)
+	g.copyRequestHeaders(upstreamRequest.Header, r.Header, provider)
+	g.applyProviderHeaders(upstreamRequest.Header, provider)
 
 	startedAt := time.Now()
 	resp, err := g.client.Do(upstreamRequest)
@@ -506,17 +558,17 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader) (*http.Respon
 	return resp, duration, nil
 }
 
-func (g *Gateway) applyProviderHeaders(headers http.Header) {
+func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderConfig) {
 	// 1. Always clear the client's standard Authorization
 	headers.Del(authHeaderName)
 
 	// 2. Apply APIKey if present
-	if g.provider.APIKey != "" {
-		headers.Set(authHeaderName, "Bearer "+g.provider.APIKey)
+	if provider.APIKey != "" {
+		headers.Set(authHeaderName, "Bearer "+provider.APIKey)
 	}
 
 	// 3. Apply custom headers (can override Authorization if specified)
-	for k, v := range g.provider.Headers {
+	for k, v := range provider.Headers {
 		headers.Set(k, v)
 	}
 }
@@ -548,12 +600,12 @@ func joinURLPath(basePath, requestPath string) string {
 	}
 }
 
-func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
+func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConfig) {
 	for key, values := range src {
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if g.isProviderHeader(key) {
+		if g.isProviderHeader(key, provider) {
 			continue
 		}
 		if strings.EqualFold(key, "Accept-Encoding") {
@@ -566,11 +618,11 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header) {
 	}
 }
 
-func (g *Gateway) isProviderHeader(key string) bool {
+func (g *Gateway) isProviderHeader(key string, provider ProviderConfig) bool {
 	if strings.EqualFold(key, authHeaderName) {
 		return true
 	}
-	for k := range g.provider.Headers {
+	for k := range provider.Headers {
 		if strings.EqualFold(key, k) {
 			return true
 		}

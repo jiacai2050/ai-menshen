@@ -14,8 +14,16 @@ base_url = "https://api.openai.com/v1"
 api_key = "${OPENAI_API_KEY}"  # supports ${ENV}
 # Optional: override the client's model before forwarding upstream.
 # model = "gpt-4.1"
+# Request distribution weight (set to 0 to disable this provider)
+weight = 1
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
 # headers = { "cf-aig-authorization" = "Bearer ${CLOUDFLARE_API_KEY}" }  # values support ${ENV}
+
+# Add more [[providers]] blocks for weighted load balancing.
+# [[providers]]
+# base_url = "https://api.deepseek.com"
+# api_key = "${DEEPSEEK_API_KEY}"
+# weight = 2
 
 [upstream]
 # Upstream request timeout in seconds (default: 300)

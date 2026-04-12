@@ -173,6 +173,7 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `api_key` | Upstream key | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |
+| | `weight` | Weighted request share (`0` disables the provider; startup fails if all are `0`) | `0` |
 | **Upstream** | `timeout` | Upstream request timeout (seconds) | `300` (5 min) |
 | **Storage** | `retention_days` | Automatically purge logs older than X days | `90` |
 | **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
@@ -181,3 +182,27 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `max_age` | Cache TTL in seconds (0 = never expire) | `0` |
 | **Logging** | `log_request_body` | Persist full request body in DB | `true` |
 | | `log_response_body` | Persist full response body in DB (required for cache) | `true` |
+
+## Weighted Providers
+
+Use `providers[].weight` to control how often each upstream is selected.
+
+- `weight = 0` disables that provider.
+- Higher weights receive a larger share of requests.
+- At least one provider must have `weight > 0`, or startup fails.
+
+Example:
+
+```toml
+[[providers]]
+base_url = "https://api.openai.com/v1"
+api_key = "${OPENAI_API_KEY}"
+weight = 8
+
+[[providers]]
+base_url = "https://api.deepseek.com"
+api_key = "${DEEPSEEK_API_KEY}"
+weight = 2
+```
+
+In this example, requests will trend toward an `80% / 20%` split over time. The selection is probabilistic per request, so short runs may vary.
