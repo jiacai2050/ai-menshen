@@ -74,6 +74,9 @@ func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
 	return activeProviders, totalWeight
 }
 
+// pickProvider selects from the startup-precomputed active provider set by
+// drawing one random number in [0, totalWeight) and walking the weights until
+// the cumulative range covers that value.
 func (g *Gateway) pickProvider() ProviderConfig {
 	if len(g.activeProviders) == 1 {
 		return g.activeProviders[0]
