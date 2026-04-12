@@ -18,19 +18,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    AUDIT[ReadAll body] --> PICK["pickProviders()<br/>weighted-random primary + failover order"]
-    PICK --> LOOP["For each provider"]
-
-    LOOP --> ANALYZE["AnalyzeRequest(body, provider)<br/>model override + stream_options + cache key"]
-    ANALYZE --> CACHE{Cache hit?<br/>primary only}
+    AUDIT[ReadAll body] --> PICK["pickProvider()<br/>weighted-random selection"]
+    PICK --> ANALYZE["AnalyzeRequest(body, provider)<br/>model override + stream_options + cache key"]
+    ANALYZE --> CACHE{Cache hit?}
     CACHE -->|Yes| R1[serveCachedResponse]
     CACHE -->|No| UPSTREAM["forwardUpstream(provider)"]
-    UPSTREAM --> OK{Status < 500<br/>and not 429?}
-    OK -->|Yes| RESP[Got response]
-    OK -->|No| NEXT{More providers?}
-    NEXT -->|Yes| LOOP
-    NEXT -->|No| R2[502 + save log]
-
+    UPSTREAM --> RESP[Got response or upstream error]
     RESP --> STREAM{Stream?}
     STREAM -->|Yes| R3[proxyStream: chunk + flush]
     STREAM -->|No| R4[ReadAll + write response]
@@ -40,32 +33,25 @@ flowchart TD
 
 ### Provider selection
 
-`pickProviders()` builds the provider list for each request:
+`pickProvider()` selects one provider for each request:
 
 1. Filter out providers with `weight = 0` (disabled).
-2. `weightedPick()` — select a primary provider randomly, proportional to weights.
-3. Return primary first, remaining active providers follow as failover candidates.
-4. Single active provider → no allocation, returned directly.
-
-### Failover loop
-
-For each provider in the list:
-
-1. `AnalyzeRequest` — applies model override, injects `stream_options`, builds cache key, marshals body.
-2. Cache lookup (primary provider only, i == 0) — hit returns immediately.
-3. `forwardUpstream` — builds URL, injects provider auth/headers, sends request.
-4. Status < 500 and not 429 → break with success. Otherwise → close body, try next provider.
+2. `weightedPick()` randomly selects among active providers proportional to weight.
+3. If only one active provider remains, it is used directly.
+4. If all providers are configured with `weight = 0`, the first provider is used as a defensive fallback.
 
 ### Response handling
 
-After the loop, `ServeHTTP` checks the result:
-- `resp == nil` → all providers failed, 502
+After provider selection, `ServeHTTP`:
+- performs request analysis and cache lookup for that provider
+- forwards the request upstream once
+- returns `502` if the upstream request itself fails
 - Stream → `proxyStream(resp)` — chunked streaming with SSE usage extraction
 - Non-stream → read full body, extract usage, write response
 
 ## Design Principles
 
-- **`AnalyzeRequest` is idempotent** — called per provider attempt, no shared state mutation
-- **Weighted load balancing + automatic failover** — single mechanism, no separate config toggle
-- **`proxyStream` receives an already-established `resp`** — failover happens before streaming begins
-- **Duration uses `time.Since(startedAt)`** — reflects true user-perceived latency across all attempts
+- **`AnalyzeRequest` is idempotent** — safe to run after provider selection without mutating shared state
+- **Weighted load balancing is request-scoped** — each request chooses one active provider
+- **`proxyStream` receives an already-established `resp`** — stream handling stays focused on copying and usage extraction
+- **`weight = 0` disables a provider from weighted selection** without removing its config entry

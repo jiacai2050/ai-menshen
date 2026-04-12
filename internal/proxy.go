@@ -47,11 +47,9 @@ func (g *Gateway) primaryProvider() ProviderConfig {
 	return g.cfg.Providers[0]
 }
 
-// pickProviders returns providers ordered for this request: a weighted-random
-// primary followed by the remaining active providers as failover candidates.
-// Providers with weight=0 are excluded entirely.
-func (g *Gateway) pickProviders() []ProviderConfig {
-	// Filter out weight=0 providers
+// pickProvider selects a single provider for this request using weighted random
+// selection. Providers with weight=0 are excluded entirely.
+func (g *Gateway) pickProvider() ProviderConfig {
 	var active []ProviderConfig
 	for _, p := range g.cfg.Providers {
 		if p.GetWeight() > 0 {
@@ -59,23 +57,13 @@ func (g *Gateway) pickProviders() []ProviderConfig {
 		}
 	}
 	if len(active) == 0 {
-		return g.cfg.Providers[:1] // fallback: shouldn't happen with valid config
+		return g.primaryProvider()
 	}
 	if len(active) == 1 {
-		return active
+		return active[0]
 	}
 
-	primary := weightedPick(active)
-
-	// Put selected primary first, rest follow in original order
-	result := make([]ProviderConfig, 0, len(active))
-	result = append(result, active[primary])
-	for i, p := range active {
-		if i != primary {
-			result = append(result, p)
-		}
-	}
-	return result
+	return active[weightedPick(active)]
 }
 
 // weightedPick returns the index of a randomly selected provider based on weights.
@@ -171,64 +159,36 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try each provider in order (failover on 5xx/network errors)
-	var meta RequestMeta
-	var resp *http.Response
-	var lastErr error
-	providers := g.pickProviders()
+	provider := g.pickProvider()
+	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider)
+	if err != nil {
+		logError("failed to analyze request: %v", err)
+		meta = RequestMeta{EffectiveBody: requestBody}
+	}
 
-	for i, provider := range providers {
-		meta, err = AnalyzeRequest(r.URL.Path, requestBody, provider)
-		if err != nil {
-			logError("failed to analyze request: %v", err)
-			meta = RequestMeta{EffectiveBody: requestBody}
+	if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
+		logInfo("Request Body: %s", string(meta.EffectiveBody))
+	}
+
+	if canUseCache(r, meta, g.cfg.Cache) {
+		cached, cacheErr := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxAge)
+		if cacheErr != nil {
+			logError("cache lookup failed: %v", cacheErr)
 		}
-
-		// Cache lookup on primary provider only
-		if i == 0 {
-			if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
-				logInfo("Request Body: %s", string(meta.EffectiveBody))
+		if cached != nil {
+			requestLog := RequestLog{
+				ID:          newRequestID(),
+				CreatedAt:   startedAt,
+				Path:        r.URL.Path,
+				Model:       meta.EffectiveModel,
+				CacheKey:    meta.CacheKey,
+				RequestBody: g.requestBodyForStorage(meta),
 			}
-			if canUseCache(r, meta, g.cfg.Cache) {
-				cached, cacheErr := g.storage.FindCachedResponse(meta.CacheKey, g.cfg.Cache.MaxAge)
-				if cacheErr != nil {
-					logError("cache lookup failed: %v", cacheErr)
-				}
-				if cached != nil {
-					requestLog := RequestLog{
-						ID:          newRequestID(),
-						CreatedAt:   startedAt,
-						Path:        r.URL.Path,
-						Model:       meta.EffectiveModel,
-						CacheKey:    meta.CacheKey,
-						RequestBody: g.requestBodyForStorage(meta),
-					}
-					g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
-					return
-				}
-			}
-		}
-
-		resp, _, lastErr = g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
-		if lastErr == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-			if i > 0 {
-				logInfo("failover: provider[%d] (%s) succeeded", i, provider.BaseURL)
-			}
-			break
-		}
-
-		// Failed — clean up and try next
-		if resp != nil {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("provider[%d] returned %d", i, resp.StatusCode)
-			resp = nil
-		}
-		if i < len(providers)-1 {
-			logInfo("failover: provider[%d] (%s) failed: %v, trying next", i, provider.BaseURL, lastErr)
+			g.serveCachedResponse(w, r, startedAt, requestLog, cached, meta.Stream)
+			return
 		}
 	}
 
-	duration := time.Since(startedAt)
 	requestLog := RequestLog{
 		ID:          newRequestID(),
 		CreatedAt:   startedAt,
@@ -238,8 +198,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RequestBody: g.requestBodyForStorage(meta),
 	}
 
-	if resp == nil {
-		logError("[%s] all providers failed (%.3fs): %v", requestLog.ID, duration.Seconds(), lastErr)
+	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
+	if err != nil {
+		logError("[%s] upstream request failed (%.3fs): %v", requestLog.ID, duration.Seconds(), err)
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
@@ -248,7 +209,6 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
-
 	if meta.Stream {
 		g.proxyStream(w, r, meta, requestLog, resp)
 		return

@@ -17,7 +17,7 @@ api_key = "${OPENAI_API_KEY}"  # supports ${ENV}
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
 # headers = { "cf-aig-authorization" = "Bearer ${CLOUDFLARE_API_KEY}" }  # values support ${ENV}
 
-# Add more [[providers]] blocks for load balancing & failover
+# Add more [[providers]] blocks for weighted load balancing
 # [[providers]]
 # base_url = "https://api.deepseek.com"
 # api_key = "${DEEPSEEK_API_KEY}"

@@ -90,7 +90,7 @@ func run(configPath string) error {
 		}
 	}
 	if len(cfg.Providers) > 1 {
-		log.Printf("Load balancing across %d providers (with failover)", len(cfg.Providers))
+		log.Printf("Weighted load balancing across %d providers", len(cfg.Providers))
 	}
 
 	server := &http.Server{
