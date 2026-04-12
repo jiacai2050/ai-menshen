@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jiacai2050/ai-menshen/internal/web"
@@ -26,51 +27,67 @@ const (
 	reportLogDetailPath = "/__report/log"
 )
 
+var streamBufferPool = sync.Pool{
+	New: func() any {
+		buffer := make([]byte, 16*1024)
+		return &buffer
+	},
+}
+
 type Gateway struct {
-	cfg     Config
-	storage *Storage
-	client  *http.Client
+	cfg               Config
+	activeProviders   []ProviderConfig
+	activeTotalWeight int
+	storage           *Storage
+	client            *http.Client
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
+	activeProviders, activeTotalWeight := buildActiveProviders(cfg.Providers)
+	if len(activeProviders) == 0 || activeTotalWeight <= 0 {
+		return nil, fmt.Errorf("gateway requires at least one active provider")
+	}
+
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	service := &Gateway{
-		cfg:     cfg,
-		storage: storage,
-		client:  &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
+		cfg:               cfg,
+		activeProviders:   activeProviders,
+		activeTotalWeight: activeTotalWeight,
+		storage:           storage,
+		client:            &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
 	}
 
 	return service, nil
 }
 
-func (g *Gateway) pickProvider() ProviderConfig {
-	var active []ProviderConfig
-	for _, provider := range g.cfg.Providers {
-		if provider.GetWeight() > 0 {
-			active = append(active, provider)
-		}
-	}
-	if len(active) == 1 {
-		return active[0]
-	}
-	return active[weightedPick(active)]
-}
-
-func weightedPick(providers []ProviderConfig) int {
+func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
+	activeProviders := make([]ProviderConfig, 0, len(providers))
 	totalWeight := 0
 	for _, provider := range providers {
+		if provider.GetWeight() <= 0 {
+			continue
+		}
+		activeProviders = append(activeProviders, provider)
 		totalWeight += provider.GetWeight()
 	}
 
-	pick := mrand.IntN(totalWeight)
-	for i, provider := range providers {
+	return activeProviders, totalWeight
+}
+
+func (g *Gateway) pickProvider() ProviderConfig {
+	if len(g.activeProviders) == 1 {
+		return g.activeProviders[0]
+	}
+
+	pick := mrand.IntN(g.activeTotalWeight)
+	for _, provider := range g.activeProviders {
 		pick -= provider.GetWeight()
 		if pick < 0 {
-			return i
+			return provider
 		}
 	}
 
-	return len(providers) - 1
+	return g.activeProviders[len(g.activeProviders)-1]
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +179,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if g.cfg.Verbose && len(meta.EffectiveBody) > 0 {
-		logInfo("Request Body: %s", string(meta.EffectiveBody))
+		logInfo("Request Body: %s", meta.EffectiveBody)
 	}
 
 	requestLog := RequestLog{
@@ -216,7 +233,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if g.cfg.Verbose && len(responseBody) > 0 {
-		logInfo("Response Body: %s", string(responseBody))
+		logInfo("Response Body: %s", responseBody)
 	}
 
 	usage, err := ExtractUsage(requestLog.ID, responseBody)
@@ -270,8 +287,9 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 			limit = g.cfg.Cache.MaxBodyBytes
 		}
 	}
-	// Use a fixed sized buffer for streaming to keep memory overhead predictable
-	buffer := make([]byte, 16*1024)
+	bufferPtr := streamBufferPool.Get().(*[]byte)
+	buffer := *bufferPtr
+	defer streamBufferPool.Put(bufferPtr)
 
 	var readFailed bool
 	for {
@@ -317,11 +335,11 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, meta Reque
 
 	if captured != nil && captured.Len() > 0 {
 		if g.cfg.Verbose {
-			logInfo("Stream Response Body: %s", captured.String())
+			logInfo("Stream Response Body: %s", captured.Bytes())
 		}
 	}
 
-	capturedBytes := []byte{}
+	var capturedBytes []byte
 	if captured != nil {
 		capturedBytes = captured.Bytes()
 	}

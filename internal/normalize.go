@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"hash"
 	"io"
 	"sort"
 	"strconv"
@@ -16,9 +15,6 @@ import (
 var (
 	bufferPool = sync.Pool{
 		New: func() any { return new(bytes.Buffer) },
-	}
-	sha256Pool = sync.Pool{
-		New: func() any { return sha256.New() },
 	}
 )
 
@@ -113,12 +109,8 @@ func buildCacheKey(path string, payload map[string]any) (string, error) {
 		return "", err
 	}
 
-	h := sha256Pool.Get().(hash.Hash)
-	h.Reset()
-	defer sha256Pool.Put(h)
-
-	h.Write(buf.Bytes())
-	return cacheVersion + ":" + hex.EncodeToString(h.Sum(nil)), nil
+	sum := sha256.Sum256(buf.Bytes())
+	return cacheVersion + ":" + hex.EncodeToString(sum[:]), nil
 }
 
 func writeCanonicalJSON(w io.Writer, value any, isRootRequest bool) error {

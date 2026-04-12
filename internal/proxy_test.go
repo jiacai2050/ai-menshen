@@ -8,18 +8,41 @@ import (
 )
 
 func TestPickProviderSkipsZeroWeightProviders(t *testing.T) {
-	gateway := &Gateway{
-		cfg: Config{
-			Providers: []ProviderConfig{
-				{BaseURL: "https://disabled.example", Weight: 0},
-				{BaseURL: "https://active.example", Weight: 2},
-			},
+	gateway, err := NewGateway(Config{
+		Providers: []ProviderConfig{
+			{BaseURL: "https://disabled.example", Weight: 0},
+			{BaseURL: "https://active.example", Weight: 2},
 		},
+		Upstream: UpstreamConfig{Timeout: 1},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
 	}
 
 	provider := gateway.pickProvider()
 	if provider.BaseURL != "https://active.example" {
 		t.Fatalf("pickProvider() = %q, want active provider", provider.BaseURL)
+	}
+}
+
+func TestNewGatewayPrecomputesActiveProviders(t *testing.T) {
+	gateway, err := NewGateway(Config{
+		Providers: []ProviderConfig{
+			{BaseURL: "https://disabled.example", Weight: 0},
+			{BaseURL: "https://active-a.example", Weight: 2},
+			{BaseURL: "https://active-b.example", Weight: 3},
+		},
+		Upstream: UpstreamConfig{Timeout: 1},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	if got := len(gateway.activeProviders); got != 2 {
+		t.Fatalf("len(activeProviders) = %d, want 2", got)
+	}
+	if got := gateway.activeTotalWeight; got != 5 {
+		t.Fatalf("activeTotalWeight = %d, want 5", got)
 	}
 }
 
