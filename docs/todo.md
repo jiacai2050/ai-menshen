@@ -13,3 +13,9 @@ This file tracks follow-up work that is intentionally kept out of the current PR
 
 1. Profile streaming buffer reuse impact further before adding more pooling.
 2. Revisit request normalization and canonical JSON generation only if profiling shows it is still a major hotspot.
+
+## Cache correctness with weighted providers
+
+1. Revisit cache key scoping now that provider selection happens per request.
+2. Cached responses can currently be replayed across different providers because the cache key is derived from request path + payload, not provider identity.
+3. Consider including a stable provider identifier in the cache key, or disabling cache when multiple active providers are configured with different upstreams.
