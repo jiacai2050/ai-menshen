@@ -166,11 +166,12 @@ func LoadConfig(path string) (Config, error) {
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
 
 		if provider.Proxy != "" {
-			cfg.Providers[i].Proxy = os.ExpandEnv(provider.Proxy)
-			proxyParsed, err := url.Parse(cfg.Providers[i].Proxy)
+			expanded := os.ExpandEnv(provider.Proxy)
+			proxyParsed, err := url.Parse(expanded)
 			if err != nil || proxyParsed.Scheme == "" || proxyParsed.Host == "" {
 				return cfg, fmt.Errorf("config.providers[%d].proxy is invalid", i)
 			}
+			cfg.Providers[i].Proxy = proxyParsed.String()
 		}
 
 		if cfg.Providers[i].Weight < 0 {
