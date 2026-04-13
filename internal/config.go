@@ -40,7 +40,8 @@ type ProviderConfig struct {
 }
 
 type UpstreamConfig struct {
-	Timeout int `toml:"timeout"`
+	Timeout             int `toml:"timeout"`
+	MaxIdleConnsPerHost int `toml:"max_idle_conns_per_host"`
 }
 
 type SQLiteConfig struct {
@@ -93,7 +94,8 @@ func LoadConfig(path string) (Config, error) {
 	cfg := Config{
 		Listen: ":8080",
 		Upstream: UpstreamConfig{
-			Timeout: 300,
+			Timeout:             300,
+			MaxIdleConnsPerHost: 8,
 		},
 		Storage: StorageConfig{
 			SQLite: SQLiteConfig{

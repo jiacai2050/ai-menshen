@@ -54,7 +54,7 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 		if _, exists := clients[p.Proxy]; exists {
 			continue
 		}
-		transport, err := buildTransport(p.Proxy)
+		transport, err := buildTransport(p.Proxy, cfg.Upstream.MaxIdleConnsPerHost)
 		if err != nil {
 			return nil, fmt.Errorf("build transport for proxy %q: %w", p.Proxy, err)
 		}
@@ -86,9 +86,9 @@ func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
 	return activeProviders, totalWeight
 }
 
-func buildTransport(proxyURL string) (*http.Transport, error) {
+func buildTransport(proxyURL string, maxIdleConnsPerHost int) (*http.Transport, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.MaxIdleConnsPerHost = 64
+	t.MaxIdleConnsPerHost = maxIdleConnsPerHost
 	if proxyURL != "" {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil {
