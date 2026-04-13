@@ -36,10 +36,12 @@ type ProviderConfig struct {
 	Headers map[string]string `toml:"headers"`
 	Model   string            `toml:"model"`
 	Weight  int               `toml:"weight"`
+	Proxy   string            `toml:"proxy"`
 }
 
 type UpstreamConfig struct {
-	Timeout int `toml:"timeout"`
+	Timeout             int `toml:"timeout"`
+	MaxIdleConnsPerHost int `toml:"max_idle_conns_per_host"`
 }
 
 type SQLiteConfig struct {
@@ -92,7 +94,8 @@ func LoadConfig(path string) (Config, error) {
 	cfg := Config{
 		Listen: ":8080",
 		Upstream: UpstreamConfig{
-			Timeout: 300,
+			Timeout:             300,
+			MaxIdleConnsPerHost: 8,
 		},
 		Storage: StorageConfig{
 			SQLite: SQLiteConfig{
@@ -163,6 +166,15 @@ func LoadConfig(path string) (Config, error) {
 		}
 
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
+
+		if provider.Proxy != "" {
+			expanded := os.ExpandEnv(provider.Proxy)
+			proxyParsed, err := url.Parse(expanded)
+			if err != nil || proxyParsed.Scheme == "" || proxyParsed.Host == "" {
+				return cfg, fmt.Errorf("config.providers[%d].proxy is invalid", i)
+			}
+			cfg.Providers[i].Proxy = proxyParsed.String()
+		}
 
 		if cfg.Providers[i].Weight < 0 {
 			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)

@@ -16,6 +16,8 @@ api_key = "${OPENAI_API_KEY}"  # supports ${ENV}
 # model = "gpt-4.1"
 # Request distribution weight (set to 0 to disable this provider)
 weight = 1
+# Optional: HTTP/SOCKS5 proxy for this provider (empty = use HTTP_PROXY/HTTPS_PROXY env vars)
+# proxy = "http://127.0.0.1:7890"  # supports ${ENV}
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
 # headers = { "cf-aig-authorization" = "Bearer ${CLOUDFLARE_API_KEY}" }  # values support ${ENV}
 
@@ -28,6 +30,8 @@ weight = 1
 [upstream]
 # Upstream request timeout in seconds (default: 300)
 # timeout = 300
+# Max idle connections per upstream host (default: 8)
+# max_idle_conns_per_host = 8
 
 [storage]
 retention_days = 90
