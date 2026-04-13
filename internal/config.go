@@ -36,6 +36,7 @@ type ProviderConfig struct {
 	Headers map[string]string `toml:"headers"`
 	Model   string            `toml:"model"`
 	Weight  int               `toml:"weight"`
+	Proxy   string            `toml:"proxy"`
 }
 
 type UpstreamConfig struct {
@@ -163,6 +164,14 @@ func LoadConfig(path string) (Config, error) {
 		}
 
 		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
+
+		if provider.Proxy != "" {
+			cfg.Providers[i].Proxy = os.ExpandEnv(provider.Proxy)
+			proxyParsed, err := url.Parse(cfg.Providers[i].Proxy)
+			if err != nil || proxyParsed.Scheme == "" || proxyParsed.Host == "" {
+				return cfg, fmt.Errorf("config.providers[%d].proxy is invalid", i)
+			}
+		}
 
 		if cfg.Providers[i].Weight < 0 {
 			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)

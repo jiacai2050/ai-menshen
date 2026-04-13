@@ -39,7 +39,7 @@ type Gateway struct {
 	activeProviders   []ProviderConfig
 	activeTotalWeight int
 	storage           *Storage
-	client            *http.Client
+	clients           map[string]*http.Client // keyed by provider proxy URL ("" = direct)
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
@@ -49,12 +49,24 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 	}
 
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
+	clients := make(map[string]*http.Client)
+	for _, p := range activeProviders {
+		if _, exists := clients[p.Proxy]; exists {
+			continue
+		}
+		transport, err := buildTransport(p.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("build transport for proxy %q: %w", p.Proxy, err)
+		}
+		clients[p.Proxy] = &http.Client{Transport: transport, Timeout: timeout}
+	}
+
 	service := &Gateway{
 		cfg:               cfg,
 		activeProviders:   activeProviders,
 		activeTotalWeight: activeTotalWeight,
 		storage:           storage,
-		client:            &http.Client{Transport: http.DefaultTransport, Timeout: timeout},
+		clients:           clients,
 	}
 
 	return service, nil
@@ -72,6 +84,31 @@ func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
 	}
 
 	return activeProviders, totalWeight
+}
+
+func buildTransport(proxyURL string) (*http.Transport, error) {
+	t := &http.Transport{
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   64,
+		IdleConnTimeout:       120 * time.Second,
+		TLSHandshakeTimeout:  10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	if proxyURL == "" {
+		t.Proxy = http.ProxyFromEnvironment
+	} else {
+		parsed, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse proxy URL %q: %w", proxyURL, err)
+		}
+		t.Proxy = http.ProxyURL(parsed)
+	}
+	return t, nil
+}
+
+func (g *Gateway) clientForProvider(provider ProviderConfig) *http.Client {
+	return g.clients[provider.Proxy]
 }
 
 // pickProvider selects from the startup-precomputed active provider set by
@@ -172,7 +209,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	provider := g.pickProvider()
 
-	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider)
+	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider, g.cfg.Cache.Enable)
 	if err != nil {
 		logError("failed to analyze request: %v", err)
 		// Fallback to original body and default meta
@@ -549,7 +586,7 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider Prov
 	g.applyProviderHeaders(upstreamRequest.Header, provider)
 
 	startedAt := time.Now()
-	resp, err := g.client.Do(upstreamRequest)
+	resp, err := g.clientForProvider(provider).Do(upstreamRequest)
 	duration := time.Since(startedAt)
 	if err != nil {
 		return nil, duration, fmt.Errorf("send upstream request: %w", err)

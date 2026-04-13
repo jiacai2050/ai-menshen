@@ -58,16 +58,19 @@ func TestForwardUpstreamUsesSelectedProvider(t *testing.T) {
 	}))
 	defer server.Close()
 
-	gateway := &Gateway{
-		client: server.Client(),
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", http.NoBody)
-	resp, _, err := gateway.forwardUpstream(req, http.NoBody, ProviderConfig{
+	provider := ProviderConfig{
 		BaseURL: server.URL,
 		APIKey:  "sk-upstream",
 		Headers: map[string]string{"X-Upstream-Key": "provider"},
-	})
+	}
+	gateway := &Gateway{
+		clients: map[string]*http.Client{
+			"": server.Client(),
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", http.NoBody)
+	resp, _, err := gateway.forwardUpstream(req, http.NoBody, provider)
 	if err != nil {
 		t.Fatalf("forwardUpstream() error = %v", err)
 	}

@@ -18,7 +18,7 @@ var (
 	}
 )
 
-func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestMeta, error) {
+func AnalyzeRequest(path string, body []byte, provider ProviderConfig, cacheEnabled bool) (RequestMeta, error) {
 	meta := RequestMeta{
 		EffectiveBody: body,
 	}
@@ -65,11 +65,13 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig) (RequestM
 		meta.EffectiveBody = effectiveBody
 	}
 
-	cacheKey, err := buildCacheKey(path, payload)
-	if err != nil {
-		return meta, fmt.Errorf("build cache key: %w", err)
+	if cacheEnabled {
+		cacheKey, err := buildCacheKey(path, payload)
+		if err != nil {
+			return meta, fmt.Errorf("build cache key: %w", err)
+		}
+		meta.CacheKey = cacheKey
 	}
-	meta.CacheKey = cacheKey
 
 	return meta, nil
 }

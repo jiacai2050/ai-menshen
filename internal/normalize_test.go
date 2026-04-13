@@ -133,7 +133,7 @@ func TestAnalyzeRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			meta, err := AnalyzeRequest(tt.path, tt.body, tt.provider)
+			meta, err := AnalyzeRequest(tt.path, tt.body, tt.provider, true)
 			if err != nil {
 				t.Fatalf("AnalyzeRequest() error = %v", err)
 			}
