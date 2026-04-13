@@ -39,7 +39,7 @@ type Gateway struct {
 	activeProviders   []ProviderConfig
 	activeTotalWeight int
 	storage           *Storage
-	clients           map[string]*http.Client // keyed by provider proxy URL ("" = direct)
+	clients           map[string]*http.Client // keyed by provider proxy URL ("" = use env proxy settings)
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
@@ -87,17 +87,9 @@ func buildActiveProviders(providers []ProviderConfig) ([]ProviderConfig, int) {
 }
 
 func buildTransport(proxyURL string) (*http.Transport, error) {
-	t := &http.Transport{
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   64,
-		IdleConnTimeout:       120 * time.Second,
-		TLSHandshakeTimeout:  10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	if proxyURL == "" {
-		t.Proxy = http.ProxyFromEnvironment
-	} else {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = 64
+	if proxyURL != "" {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy URL %q: %w", proxyURL, err)
