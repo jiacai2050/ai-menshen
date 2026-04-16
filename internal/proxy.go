@@ -128,7 +128,7 @@ func shouldFailover(resp *http.Response, err error) bool {
 	if err != nil {
 		return true
 	}
-	return resp.StatusCode >= 500 || resp.StatusCode == 429
+	return resp != nil && (resp.StatusCode >= 500 || resp.StatusCode == 429)
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
