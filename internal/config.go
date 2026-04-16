@@ -18,9 +18,14 @@ type Config struct {
 	Auth      AuthConfig       `toml:"auth"`
 	Providers []ProviderConfig `toml:"providers"`
 	Upstream  UpstreamConfig   `toml:"upstream"`
+	Failover  FailoverConfig   `toml:"failover"`
 	Storage   StorageConfig    `toml:"storage"`
 	Cache     CacheConfig      `toml:"cache"`
 	Logging   LoggingConfig    `toml:"logging"`
+}
+
+type FailoverConfig struct {
+	Enable bool `toml:"enable"`
 }
 
 type AuthConfig struct {
@@ -96,6 +101,9 @@ func LoadConfig(path string) (Config, error) {
 		Upstream: UpstreamConfig{
 			Timeout:             300,
 			MaxIdleConnsPerHost: 8,
+		},
+		Failover: FailoverConfig{
+			Enable: true,
 		},
 		Storage: StorageConfig{
 			SQLite: SQLiteConfig{
