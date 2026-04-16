@@ -7,6 +7,7 @@ This project is a lightweight OpenAI-compatible proxy service written in Go.
 ai-menshen now does more than basic auth injection:
 
 - forwards OpenAI-compatible requests to one configured upstream provider chosen per request
+- automatically fails over to another provider on network errors, HTTP 5xx, or 429
 - keeps the real upstream API key in a local TOML config file
 - optionally overrides the client `model` with the selected provider's `model`
 - records both non-stream and stream requests and responses in SQLite
@@ -50,10 +51,12 @@ Important fields:
 - `cache.max_body_bytes`: maximum cached response body size
 - `logging.log_request_body`: whether to store request bodies
 - `logging.log_response_body`: whether to store response bodies
+- `failover.enable`: enables automatic failover to other providers (default `true`)
 - `verbose`: enables debug logging to stdout
 
 ## Runtime Behavior
 
+- **Failover**: when a provider returns a network error, HTTP 5xx, or 429, the proxy automatically retries with the remaining active providers in config order. The first provider is chosen by weighted random; subsequent attempts are deterministic. For streaming requests, failover only happens at the connection stage — once SSE data has begun flowing to the client the stream is not retried. If all providers fail (or failover is disabled), the last upstream response is passed through as-is rather than replaced with a synthetic 502. Failover applies only to auditable paths (`/chat/completions`, `/responses`); passthrough paths use a single provider.
 - Non-stream requests are candidates for auditing, usage extraction, and cache replay.
 - Stream requests are also audited and can contribute usage stats, but cache replay remains non-stream only.
 - Cloudflare AI Gateway still uses `cf-aig-authorization` instead of `Authorization`.
