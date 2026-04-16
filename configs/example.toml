@@ -33,6 +33,10 @@ weight = 1
 # Max idle connections per upstream host (default: 8)
 # max_idle_conns_per_host = 8
 
+[failover]
+# Automatically retry with next provider on network errors, HTTP 5xx, or 429 (default: true)
+# enable = true
+
 [storage]
 retention_days = 90
 

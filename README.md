@@ -1,6 +1,6 @@
 # ai-menshen
 
-ai-menshen (门神) is a lightweight, local-first AI Gateway. It proxies any OpenAI-compatible API, providing **Auth Injection (BYOK)**, **Model Overriding**, **Usage Auditing**, and **Response Caching**—all while keeping your API keys and logs strictly under your control.
+ai-menshen (门神) is a lightweight, local-first AI Gateway. It proxies any OpenAI-compatible API, providing **Auth Injection (BYOK)**, **Model Overriding**, **Failover**, **Usage Auditing**, and **Response Caching**—all while keeping your API keys and logs strictly under your control.
 
 > *Single Go binary. Zero external dependencies besides SQLite.*
 
@@ -177,6 +177,7 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | **Upstream** | `timeout` | Upstream request timeout (seconds) | `300` (5 min) |
 | **Storage** | `retention_days` | Automatically purge logs older than X days | `90` |
 | **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
+| **Failover** | `enable` | Auto-retry with next provider on failure | `true` |
 | **Cache** | `enable` | Cache 200 responses | `true` |
 | | `max_body_bytes` | Skip caching responses larger than this size (0 = no limit) | `5242880` (5 MiB) |
 | | `max_age` | Cache TTL in seconds (0 = never expire) | `0` |
@@ -206,3 +207,15 @@ weight = 2
 ```
 
 In this example, requests will trend toward an `80% / 20%` split over time. The selection is probabilistic per request, so short runs may vary.
+
+## Failover
+
+When `failover.enable = true` (the default), a failed request is automatically retried against the remaining providers:
+
+- **Triggers**: network errors, HTTP 5xx, or 429 (Too Many Requests).
+- **Order**: the first provider is chosen by weighted random; on failure, the remaining providers are tried in config order.
+- **Streaming**: failover only happens before any data has been sent to the client. Once SSE chunks are flowing, the stream is not retried.
+- **Passthrough**: non-auditable paths (e.g., `/models`) use a single provider and do not failover.
+- **Graceful degradation**: if every provider fails, the last upstream response (including its original status code and body) is passed through to the client rather than being replaced with a generic 502.
+
+No extra configuration is needed—just define multiple `[[providers]]` blocks and failover works automatically.
