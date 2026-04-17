@@ -56,7 +56,7 @@ Important fields:
 
 ## Runtime Behavior
 
-- **Failover**: when a provider returns a network error, HTTP 5xx, or 429, the proxy automatically retries with the remaining active providers in config order. The first provider is chosen by weighted random; subsequent attempts are deterministic. For streaming requests, failover only happens at the connection stage — once SSE data has begun flowing to the client the stream is not retried. If all providers fail (or failover is disabled), the last upstream response is passed through as-is rather than replaced with a synthetic 502. Failover applies only to auditable paths (`/chat/completions`, `/responses`); passthrough paths use a single provider.
+- **Failover**: when a provider returns a network error, HTTP 5xx, or select 4xx (401, 403, 404, 408, 413, 422, 429), the proxy automatically retries with the remaining active providers in config order. The first provider is chosen by weighted random; subsequent attempts are deterministic. For streaming requests, failover only happens at the connection stage — once SSE data has begun flowing to the client the stream is not retried. If all providers fail (or failover is disabled), the last upstream response is passed through as-is rather than replaced with a synthetic 502. Failover applies only to auditable paths (`/chat/completions`, `/responses`); passthrough paths use a single provider.
 - Non-stream requests are candidates for auditing, usage extraction, and cache replay.
 - Stream requests are also audited and can contribute usage stats, but cache replay remains non-stream only.
 - Cloudflare AI Gateway still uses `cf-aig-authorization` instead of `Authorization`.

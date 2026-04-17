@@ -123,12 +123,27 @@ func (g *Gateway) pickProvider() ProviderConfig {
 }
 
 // shouldFailover returns true if the upstream response indicates we should
-// try the next provider: network errors, HTTP 5xx, or 429 (rate limited).
+// try the next provider: network errors, HTTP 5xx, or select 4xx codes
+// where a different provider may succeed.
 func shouldFailover(resp *http.Response, err error) bool {
 	if err != nil {
 		return true
 	}
-	return resp != nil && (resp.StatusCode >= 500 || resp.StatusCode == 429)
+	if resp == nil {
+		return false
+	}
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, // 401
+		http.StatusForbidden,             // 403
+		http.StatusNotFound,              // 404
+		http.StatusRequestTimeout,        // 408
+		http.StatusRequestEntityTooLarge, // 413
+		http.StatusUnprocessableEntity,   // 422
+		http.StatusTooManyRequests:       // 429
+		return true
+	default:
+		return resp.StatusCode >= 500
+	}
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
