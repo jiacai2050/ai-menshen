@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.0 (2026-04-19)
+
+### Added
+- Configurable upstream failover via `[failover] enable` (default `true`)
+- Retry/failover now also covers selected upstream `4xx` responses (`401`, `403`, `404`, `408`, `413`, `422`, `429`) in addition to network errors and `5xx`
+- Per-provider upstream proxy support
+- Weighted provider selection using `providers[].weight` for load distribution
+
+### Changed
+- Updated README documentation for gateway usage and macOS background service setup
+
 ## v1.2.0 (2026-03-29)
 
 ### Added
