@@ -135,7 +135,9 @@ make build
         print(chunk.choices[0].delta.content or "", end="")
     ```
 
-## Run as Background Service (macOS)
+## Run as Background Service
+
+### macOS
 
 A launchd plist is provided at [`configs/net.liujiacai.ai-menshen.plist`](configs/net.liujiacai.ai-menshen.plist).
 
@@ -157,6 +159,35 @@ tail -f /tmp/ai-menshen-stderr.log
 ```
 
 The service starts automatically on login and restarts on crash. It expects the binary at `~/.local/bin/ai-menshen` and config at `~/.config/ai-menshen/config.toml`.
+
+### Linux
+
+A systemd unit file is provided at [`configs/ai-menshen.service`](configs/ai-menshen.service).
+
+```bash
+# Install the service
+sudo cp configs/ai-menshen.service /etc/systemd/system/
+
+# Edit the service file to match your setup (User, ExecStart, config path)
+sudo systemctl edit --full ai-menshen
+
+# Enable (start at boot) and start immediately
+sudo systemctl enable --now ai-menshen
+
+# Restart after config change
+sudo systemctl restart ai-menshen
+
+# Check status
+systemctl status ai-menshen
+
+# View logs
+journalctl -u ai-menshen -f
+
+# Stop and disable
+sudo systemctl disable --now ai-menshen
+```
+
+The service restarts on failure. Edit the unit file to set your username, binary path, and config path.
 
 ## Configuration Guide
 
