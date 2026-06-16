@@ -16,12 +16,17 @@ type Config struct {
 	Listen    string           `toml:"listen"`
 	Verbose   bool             `toml:"verbose"`
 	Auth      AuthConfig       `toml:"auth"`
+	Web       WebConfig        `toml:"web"`
 	Providers []ProviderConfig `toml:"providers"`
 	Upstream  UpstreamConfig   `toml:"upstream"`
 	Failover  FailoverConfig   `toml:"failover"`
 	Storage   StorageConfig    `toml:"storage"`
 	Cache     CacheConfig      `toml:"cache"`
 	Logging   LoggingConfig    `toml:"logging"`
+}
+
+type WebConfig struct {
+	Listen string `toml:"listen"`
 }
 
 type FailoverConfig struct {
@@ -98,6 +103,9 @@ func ParseCLI(args []string, output io.Writer) (CLIOptions, error) {
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{
 		Listen: ":8080",
+		Web: WebConfig{
+			Listen: ":8081",
+		},
 		Upstream: UpstreamConfig{
 			Timeout:             300,
 			MaxIdleConnsPerHost: 8,
@@ -128,6 +136,13 @@ func LoadConfig(path string) (Config, error) {
 
 	if err := toml.Unmarshal(content, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	if strings.TrimSpace(cfg.Listen) == "" {
+		return cfg, fmt.Errorf("config.listen is required")
+	}
+	if strings.TrimSpace(cfg.Web.Listen) == "" {
+		return cfg, fmt.Errorf("config.web.listen is required")
 	}
 
 	if cfg.Auth.Enable {

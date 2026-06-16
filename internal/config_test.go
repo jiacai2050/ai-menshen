@@ -23,6 +23,22 @@ path = "./test.db"
 	}
 }
 
+func TestLoadConfigDefaultsWebListen(t *testing.T) {
+	cfg := loadTestConfig(t, `
+	[[providers]]
+	base_url = "https://api.openai.com/v1"
+	api_key = "sk-test"
+	weight = 1
+
+	[storage.sqlite]
+	path = "./test.db"
+	`)
+
+	if got := cfg.Web.Listen; got != ":8081" {
+		t.Fatalf("Web.Listen = %q, want :8081", got)
+	}
+}
+
 func TestLoadConfigRejectsNegativeProviderWeight(t *testing.T) {
 	_, err := LoadConfig(writeTestConfig(t, `
 [[providers]]

@@ -82,7 +82,8 @@ func run(configPath string) error {
 		return err
 	}
 
-	log.Printf("ai-menshen started on %s", cfg.Listen)
+	log.Printf("ai-menshen API started on %s", cfg.Listen)
+	log.Printf("ai-menshen Web UI started on %s", cfg.Web.Listen)
 	for i, provider := range cfg.Providers {
 		log.Printf("  provider[%d]: %s (weight=%d)", i, provider.BaseURL, provider.Weight)
 		if provider.Model != "" {
@@ -93,17 +94,24 @@ func run(configPath string) error {
 		log.Printf("Weighted load balancing across %d providers", len(cfg.Providers))
 	}
 
-	server := &http.Server{
+	apiServer := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: handler,
+		Handler: http.HandlerFunc(handler.ServeAPIHTTP),
+	}
+	webServer := &http.Server{
+		Addr:    cfg.Web.Listen,
+		Handler: http.HandlerFunc(handler.ServeWebHTTP),
 	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-	listenErr := make(chan error, 1)
+	listenErr := make(chan error, 2)
 	go func() {
-		listenErr <- server.ListenAndServe()
+		listenErr <- fmt.Errorf("api server: %w", apiServer.ListenAndServe())
+	}()
+	go func() {
+		listenErr <- fmt.Errorf("web server: %w", webServer.ListenAndServe())
 	}()
 
 	select {
@@ -119,5 +127,8 @@ func run(configPath string) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	return server.Shutdown(shutdownCtx)
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	return webServer.Shutdown(shutdownCtx)
 }

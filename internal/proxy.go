@@ -146,39 +146,16 @@ func shouldFailover(resp *http.Response, err error) bool {
 	}
 }
 
-func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 1. Silent rejection for common browser noise
-	if r.URL.Path == "/favicon.ico" || r.URL.Path == "/robots.txt" || strings.HasPrefix(r.URL.Path, "/apple-touch-icon") {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-
-	// 2. Optional auth check for all routes (Proxy, Dashboard, Reports, Assets)
+func (g *Gateway) ServeWebHTTP(w http.ResponseWriter, r *http.Request) {
 	if g.cfg.Auth.Enable {
-		isUI := r.URL.Path == "/" ||
-			strings.HasPrefix(r.URL.Path, "/__report/") ||
-			strings.HasPrefix(r.URL.Path, "/assets/")
-
-		if isUI {
-			// Browser-friendly Basic Auth for UI and Assets
-			user, pass, ok := r.BasicAuth()
-			if !ok || user != g.cfg.Auth.User || pass != g.cfg.Auth.Password {
-				w.Header().Set("WWW-Authenticate", `Basic realm="ai-menshen"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		} else {
-			// OpenAI-compatible Bearer Token for API
-			authHeader := r.Header.Get(authHeaderName)
-			expected := "Bearer " + g.cfg.Auth.Token
-			if authHeader != expected {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != g.cfg.Auth.User || pass != g.cfg.Auth.Password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="ai-menshen"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 	}
 
-	// 3. UI, Report APIs, and Static Assets
 	if r.Method == http.MethodGet && r.URL.Path == "/" {
 		g.handleDashboard(w)
 		return
@@ -209,7 +186,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Proxy Path
+	http.NotFound(w, r)
+}
+
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	g.ServeAPIHTTP(w, r)
+}
+
+func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
+	if g.cfg.Auth.Enable {
+		authHeader := r.Header.Get(authHeaderName)
+		expected := "Bearer " + g.cfg.Auth.Token
+		if authHeader != expected {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	if !isAuditablePath(r.URL.Path) {
 		g.proxyPassthrough(w, r)
 		return

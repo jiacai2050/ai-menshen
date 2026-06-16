@@ -1,6 +1,9 @@
 listen = ":8080"
 verbose = false
 
+[web]
+listen = ":8081"
+
 [auth]
 enable = false
 # Used for browser-based Dashboard access (User:Password)

@@ -35,7 +35,8 @@ graph TD
 
 ## Built-in Dashboard
 
-ai-menshen ships with a lightweight, built-in dashboard at `http://localhost:8080/`.
+ai-menshen ships with a lightweight, built-in dashboard at `http://localhost:8081/`.
+The dashboard runs on a separate Web port from the OpenAI-compatible API proxy.
 
 Zero external CDN calls—all JS/CSS is embedded, making it ideal for offline or air-gapped environments.
 
@@ -195,7 +196,8 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 
 | Section | Field | Description | Default |
 | :--- | :--- | :--- | :--- |
-| **Global** | `listen` | Local bind address | `:8080` |
+| **Global** | `listen` | API proxy bind address | `:8080` |
+| **Web** | `listen` | Dashboard and report API bind address | `:8081` |
 | **Auth** | `enable` | Enable authentication for gateway & dashboard | `false` |
 | | `user` | Username for **Dashboard** (Basic Auth) | - |
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
