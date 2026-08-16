@@ -137,6 +137,7 @@ func shouldFailover(resp *http.Response, err error) bool {
 		http.StatusForbidden,             // 403
 		http.StatusNotFound,              // 404
 		http.StatusRequestTimeout,        // 408
+		http.StatusGone,                  // 410
 		http.StatusRequestEntityTooLarge, // 413
 		http.StatusUnprocessableEntity,   // 422
 		http.StatusTooManyRequests:       // 429
