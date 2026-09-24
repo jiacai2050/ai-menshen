@@ -4,6 +4,8 @@ ai-menshen (门神) is a lightweight, local-first AI Gateway. It proxies any Ope
 
 > *Single Go binary. Zero external dependencies besides SQLite.*
 
+> https://jiacai2050.github.io/ai-menshen/
+
 ```mermaid
 graph TD
     subgraph EXTERNAL [External World]
@@ -51,13 +53,13 @@ Zero external CDN calls—all JS/CSS is embedded, making it ideal for offline or
 *Download and install the pre-built binary from GitHub Releases.*
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.sh | sh
+curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh
 ```
 
 The script supports custom version and installation directory:
 ```bash
 # Pass arguments using sh -s --
-curl -fsSL https://raw.githubusercontent.com/jiacai2050/ai-menshen/main/install.sh | sh -s -- --version v1.0.0 --prefix /usr/local/bin
+curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh -s -- --version v1.0.0 --prefix /usr/local/bin
 ```
 
 | Option | Description | Default |

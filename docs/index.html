@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1110">
+  <meta name="description" content="ai-menshen is a local-first OpenAI-compatible AI gateway for auth injection, provider failover, usage auditing, and response caching.">
+  <title>ai-menshen — Your AI traffic, under your control</title>
+  <style>
+    :root {
+      --bg: #0b1110;
+      --panel: #111a17;
+      --panel-2: #15231e;
+      --line: rgba(207, 239, 219, .13);
+      --text: #eff8f0;
+      --muted: #9db0a4;
+      --green: #8df5ae;
+      --green-2: #42d77a;
+      --orange: #ffb870;
+      --max: 1160px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 80% -10%, rgba(66, 215, 122, .17), transparent 33rem),
+        radial-gradient(circle at -10% 30%, rgba(255, 184, 112, .08), transparent 28rem),
+        var(--bg);
+      font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: inherit; text-decoration: none; }
+    .wrap { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; }
+    .nav { height: 80px; display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 11px; font-weight: 750; letter-spacing: -.02em; }
+    .brand-mark {
+      display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--green);
+      border-radius: 10px; color: var(--green); font-size: 17px; font-weight: 800;
+      box-shadow: 0 0 24px rgba(141, 245, 174, .14);
+    }
+    .brand small { display: block; color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase; }
+    .links { display: flex; align-items: center; gap: 27px; color: var(--muted); font-size: 14px; }
+    .links a:hover { color: var(--text); }
+    .github { padding: 9px 15px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); }
+    .hero { min-height: calc(100vh - 80px); padding: 54px 0 92px; max-width: 850px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; color: var(--green); font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 13px var(--green-2); }
+    h1 { margin: 21px 0 20px; max-width: 830px; font-size: clamp(46px, 7vw, 82px); line-height: .99; letter-spacing: -.07em; }
+    h1 em { color: var(--green); font-style: normal; }
+    .hero p { max-width: 670px; margin: 0; color: var(--muted); font-size: 20px; line-height: 1.55; }
+    .actions { display: flex; flex-wrap: wrap; gap: 13px; margin-top: 34px; }
+    .button { display: inline-flex; align-items: center; gap: 9px; padding: 13px 19px; border-radius: 8px; font-size: 14px; font-weight: 700; transition: transform .2s, background .2s; }
+    .button:hover { transform: translateY(-2px); }
+    .primary { background: var(--green); color: #102018; }
+    .primary:hover { background: #b1ffc5; }
+    .secondary { border: 1px solid var(--line); color: var(--text); }
+    .secondary:hover { background: var(--panel); }
+    .features { padding: 0 0 110px; }
+    .section-label { margin: 0 0 24px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+    .feature { min-height: 235px; padding: 28px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(17, 26, 23, .56); }
+    .feature:nth-child(2) { background: rgba(21, 35, 30, .72); }
+    .icon { color: var(--green); font-size: 22px; }
+    .feature h3 { margin: 23px 0 8px; font-size: 19px; letter-spacing: -.02em; }
+    .feature p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .architecture { padding: 82px 0; border-top: 1px solid var(--line); }
+    .arch-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 80px; align-items: center; }
+    h2 { margin: 0 0 17px; font-size: clamp(30px, 4vw, 48px); line-height: 1.08; letter-spacing: -.055em; }
+    .architecture .copy p { color: var(--muted); }
+    .flow-map { display: grid; grid-template-columns: 1fr 42px 1.2fr 42px 1fr; grid-template-rows: auto 54px auto; align-items: center; padding: 28px 22px; border: 1px solid var(--line); border-radius: 12px; background: linear-gradient(145deg, rgba(21, 35, 30, .82), rgba(12, 21, 17, .9)); box-shadow: 0 20px 55px rgba(0, 0, 0, .2); }
+    .flow-card { min-width: 0; padding: 18px 15px; border: 1px solid #345540; border-radius: 10px; background: #121e19; }
+    .flow-card.gateway { grid-column: 3; grid-row: 1; padding: 22px 18px; border-color: #4f9b63; background: linear-gradient(145deg, #173b28, #214d31); }
+    .flow-card.storage { grid-column: 3; grid-row: 3; }
+    .flow-card h3 { margin: 0 0 8px; color: #dbeee0; font-size: 11px; letter-spacing: .1em; }
+    .flow-card p { margin: 0; color: #91aa9a; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+    .flow-card.gateway p { color: #b7d8be; }
+    .flow-card .card-icon { display: block; width: 25px; height: 25px; margin-bottom: 13px; border: 1px solid #6db47e; border-radius: 7px; color: var(--green); text-align: center; font: 700 14px/23px ui-monospace, monospace; }
+    .flow-card.client { grid-column: 1; grid-row: 1; }
+    .flow-card.provider { grid-column: 5; grid-row: 1; }
+    .flow-arrow { position: relative; color: #789685; font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
+    .flow-arrow::after { display: block; margin: 8px auto 0; color: #8df5ae; content: "→"; font-size: 18px; line-height: 12px; }
+    .flow-arrow.left { grid-column: 2; grid-row: 1; }
+    .flow-arrow.right { grid-column: 4; grid-row: 1; }
+    .flow-arrow.down { grid-column: 3; grid-row: 2; align-self: stretch; }
+    .flow-arrow.down::after { content: "↓"; }
+    .flow-arrow.down span { display: block; margin-top: 10px; }
+    .dashboard { padding: 95px 0 110px; }
+    .dashboard-inner { display: grid; grid-template-columns: 1fr 1.05fr; gap: 60px; align-items: center; }
+    .dashboard-copy p { color: var(--muted); max-width: 450px; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 27px; }
+    .tag { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; color: #c8d9cd; font-size: 12px; }
+    .screen { border: 1px solid var(--line); border-radius: 10px; background: #101916; box-shadow: 0 25px 70px rgba(0,0,0,.25); overflow: hidden; }
+    .screen-bar { display: flex; justify-content: space-between; padding: 13px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .screen-body { padding: 21px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .stat { padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+    .stat small { color: var(--muted); font-size: 10px; }
+    .stat b { display: block; margin-top: 5px; color: var(--green); font-size: 20px; }
+    .chart { position: relative; height: 135px; margin-top: 14px; border-bottom: 1px solid var(--line); background: repeating-linear-gradient(to bottom, transparent 0 33px, rgba(207,239,219,.07) 34px); }
+    .chart svg { width: 100%; height: 100%; }
+    .screen-table { margin-top: 15px; color: var(--muted); font-size: 11px; }
+    .screen-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .screen-row b { color: var(--text); font-weight: 500; }
+    .quick-start { margin-bottom: 85px; padding: 52px; border: 1px solid #356548; border-radius: 13px; background: linear-gradient(120deg, rgba(35, 76, 51, .75), rgba(15, 35, 26, .7)); }
+    .quick-start header { margin-bottom: 28px; }
+    .quick-start h2 { margin-bottom: 12px; }
+    .quick-start header p { max-width: 580px; margin: 0; color: #bdd3c3; }
+    .quick-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: steps; }
+    .quick-steps li { min-width: 0; padding: 18px 16px; border: 1px solid rgba(207, 239, 219, .16); border-radius: 8px; background: rgba(7, 18, 12, .28); counter-increment: steps; }
+    .quick-steps li::before { display: block; margin-bottom: 18px; color: var(--green); content: "0" counter(steps); font: 700 11px ui-monospace, monospace; }
+    .quick-steps strong { display: block; margin-bottom: 8px; font-size: 14px; }
+    .quick-steps code { display: block; overflow-wrap: anywhere; color: #c7e9ce; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .quick-steps span { display: block; margin-top: 5px; color: #8eaa97; font-size: 11px; line-height: 1.45; }
+    .quick-steps span code { display: inline; color: #b9d6bf; }
+    footer { padding: 25px 0 35px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    footer .wrap { display: flex; justify-content: space-between; gap: 20px; }
+    @media (max-width: 760px) {
+      .wrap { width: min(var(--max), calc(100% - 28px)); }
+      .nav { height: 68px; } .links a:not(.github) { display: none; }
+      .hero { min-height: calc(100svh - 68px); padding: 48px 0 70px; } .hero p { font-size: 17px; }
+      .feature-grid, .arch-grid, .dashboard-inner { grid-template-columns: 1fr; }
+      .feature { min-height: auto; } .arch-grid, .dashboard-inner { gap: 35px; }
+      .architecture, .dashboard { padding: 70px 0; }
+      .flow-map { grid-template-columns: 1fr; grid-template-rows: auto; gap: 10px; padding: 18px; }
+      .flow-card.client, .flow-card.gateway, .flow-card.provider, .flow-card.storage,
+      .flow-arrow.left, .flow-arrow.right, .flow-arrow.down { grid-column: 1; grid-row: auto; }
+      .flow-arrow { display: flex; flex-direction: column; align-items: center; }
+      .flow-arrow::after { margin: 1px auto 0; }
+      .flow-arrow.down span { margin-top: 0; }
+      .quick-start { margin-bottom: 65px; padding: 40px 22px; }
+      .quick-steps { grid-template-columns: 1fr 1fr; }
+      footer .wrap { flex-direction: column; gap: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="wrap nav">
+    <a class="brand" href="#">
+      <span class="brand-mark">门</span>
+      <span>ai-menshen<small>local-first AI gateway</small></span>
+    </a>
+    <nav class="links" aria-label="Main navigation">
+      <a href="#features">Features</a>
+      <a href="#how-it-works">How it works</a>
+      <a href="#dashboard">Dashboard</a>
+      <a class="github" href="https://github.com/jiacai2050/ai-menshen">View on GitHub&nbsp; ↗</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="wrap hero">
+      <div class="eyebrow"><i></i> OpenAI-compatible. Local-first.</div>
+      <h1>Your AI traffic,<br><em>under your control.</em></h1>
+      <p>ai-menshen is a lightweight gateway that puts auth, routing, failover, usage intelligence, and caching between your clients and any OpenAI-compatible provider.</p>
+      <div class="actions">
+        <a class="button primary" href="https://github.com/jiacai2050/ai-menshen#installation">Get started <span>→</span></a>
+        <a class="button secondary" href="https://github.com/jiacai2050/ai-menshen">Read the source <span>↗</span></a>
+      </div>
+    </section>
+
+    <section id="features" class="wrap features">
+      <p class="section-label">Everything in the path, nothing out of reach</p>
+      <div class="feature-grid">
+        <article class="feature">
+          <div class="icon">◈</div>
+          <h3>One API. Any provider.</h3>
+          <p>Keep your clients pointed at one stable OpenAI-compatible endpoint while you mix OpenAI, DeepSeek, and other upstreams behind it.</p>
+        </article>
+        <article class="feature">
+          <div class="icon">↯</div>
+          <h3>Failover that just works.</h3>
+          <p>Distribute requests by weight and retry network errors, 5xx, and rate limits against the next active provider automatically.</p>
+        </article>
+        <article class="feature">
+          <div class="icon">⌁</div>
+          <h3>See what you spend.</h3>
+          <p>Audit requests, responses, and token usage in local SQLite. Stream usage is captured too, without sending your data to a third party.</p>
+        </article>
+        <article class="feature">
+          <div class="icon">▣</div>
+          <h3>Cache the repeat work.</h3>
+          <p>Reuse matching non-stream responses locally, with configurable size and age limits to reduce latency and provider costs.</p>
+        </article>
+        <article class="feature">
+          <div class="icon">⌘</div>
+          <h3>Bring your own keys.</h3>
+          <p>Keep real upstream credentials in a local TOML configuration. Clients only ever need the gateway token.</p>
+        </article>
+        <article class="feature">
+          <div class="icon">○</div>
+          <h3>One binary. Zero fuss.</h3>
+          <p>A small Go service with SQLite and embedded dashboard assets. Perfect for a laptop, homelab, or air-gapped environment.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="architecture">
+      <div class="wrap arch-grid">
+        <div class="copy">
+          <p class="section-label">How it works</p>
+          <h2>A calm layer between your apps and the cloud.</h2>
+          <p>Clients use the API they already know. ai-menshen handles provider credentials, model overrides, routing, retries, logging, and response reuse while keeping the control plane on your machine.</p>
+        </div>
+        <div class="flow-map" aria-label="Request flow diagram">
+          <div class="flow-card client">
+            <span class="card-icon">↗</span>
+            <h3>YOUR CLIENTS</h3>
+            <p>SDK · curl · OpenClaw</p>
+          </div>
+          <div class="flow-arrow left"><span>OpenAI API</span></div>
+          <div class="flow-card gateway">
+            <span class="card-icon">✦</span>
+            <h3>AI-MENSHEN</h3>
+            <p>Auth injection · weighted routing · failover · cache · model override</p>
+          </div>
+          <div class="flow-arrow right"><span>forward / retry</span></div>
+          <div class="flow-card provider">
+            <span class="card-icon">◎</span>
+            <h3>PROVIDERS</h3>
+            <p>OpenAI · DeepSeek · any compatible API</p>
+          </div>
+          <div class="flow-arrow down"><span>audit + usage</span></div>
+          <div class="flow-card storage">
+            <span class="card-icon">▣</span>
+            <h3>LOCAL SQLITE</h3>
+            <p>Request logs · token usage · cached responses</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="dashboard" class="wrap dashboard">
+      <div class="dashboard-inner">
+        <div class="dashboard-copy">
+          <p class="section-label">Built-in visibility</p>
+          <h2>Know every request. Keep every secret.</h2>
+          <p>The embedded dashboard turns local logs into a clear view of traffic, trends, models, cache hits, latency, and token usage. No account. No external analytics. No CDN calls.</p>
+          <div class="tag-list">
+            <span class="tag">Usage trends</span><span class="tag">Model breakdown</span><span class="tag">Audit logs</span><span class="tag">Offline-ready</span>
+          </div>
+        </div>
+        <div class="screen" aria-label="Dashboard preview">
+          <div class="screen-bar"><span>门神 / Overview</span><span>Last 7 days · ● live</span></div>
+          <div class="screen-body">
+            <div class="stats"><div class="stat"><small>TOTAL REQUESTS</small><b>1,284</b></div><div class="stat"><small>CACHE HIT RATE</small><b>38.2%</b></div><div class="stat"><small>TOTAL TOKENS</small><b>2.4M</b></div></div>
+            <div class="chart"><svg viewBox="0 0 600 135" preserveAspectRatio="none" aria-hidden="true"><path d="M0 112 C45 98 55 110 90 82 S145 93 180 76 S225 83 260 52 S305 68 345 44 S395 76 430 57 S480 60 515 25 S560 42 600 10" fill="none" stroke="#8df5ae" stroke-width="3"/><path d="M0 112 C45 98 55 110 90 82 S145 93 180 76 S225 83 260 52 S305 68 345 44 S395 76 430 57 S480 60 515 25 S560 42 600 10 V135 H0Z" fill="url(#fade)" opacity=".3"/><defs><linearGradient id="fade" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#8df5ae"/><stop offset="1" stop-color="#8df5ae" stop-opacity="0"/></linearGradient></defs></svg></div>
+            <div class="screen-table"><div class="screen-row"><b>gpt-4o</b><span>842 requests&nbsp;&nbsp; 1.8M tokens</span></div><div class="screen-row"><b>deepseek-chat</b><span>319 requests&nbsp;&nbsp; 494K tokens</span></div><div class="screen-row"><b>claude-3-5-sonnet</b><span>123 requests&nbsp;&nbsp; 156K tokens</span></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="quick-start" class="wrap quick-start">
+      <header>
+        <p class="section-label">Quick start</p>
+        <h2>Up and running in four steps.</h2>
+        <p>Run the gateway locally, keep your keys in a TOML file, and point your existing OpenAI client at one stable endpoint.</p>
+      </header>
+      <ol class="quick-steps">
+        <li><strong>Install</strong><code>curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh</code><span>Or build from source: clone the repo, then run <code>make build</code>.</span></li>
+        <li><strong>Configure</strong><code>ai-menshen -gen-config &gt; ~/.config/ai-menshen/config.toml</code><span>Add your provider API key.</span></li>
+        <li><strong>Run</strong><code>ai-menshen -config ~/.config/ai-menshen/config.toml</code><span>Starts the proxy on port 8080.</span></li>
+        <li><strong>Connect</strong><code>base_url = "http://localhost:8080"</code><span>Use any OpenAI-compatible SDK.</span></li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap"><span>© 2026 ai-menshen · 门神</span><span>Built with Go · Powered by SQLite · <a href="https://github.com/jiacai2050/ai-menshen">Open source ↗</a></span></div>
+  </footer>
+</body>
+</html>
