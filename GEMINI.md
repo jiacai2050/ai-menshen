@@ -61,7 +61,7 @@ Important fields:
 - Non-stream requests are candidates for auditing, usage extraction, and cache replay.
 - Stream requests are also audited and can contribute usage stats, but cache replay remains non-stream only.
 - Cloudflare AI Gateway still uses `cf-aig-authorization` instead of `Authorization`.
-- Model-level aggregated usage is available at `GET /__report/models`.
+- Model and provider-level aggregated usage are available at `GET /__report/models` and `GET /__report/providers`.
 - The SQLite schema is intentionally minimal:
   - `request_logs`
   - `response_logs`

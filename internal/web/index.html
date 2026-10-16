@@ -78,6 +78,28 @@
             </section>
 
             <section>
+                <h5>Provider Breakdown</h5>
+                <figure>
+                    <table role="grid">
+                        <thead>
+                            <tr><th>Provider</th><th>Requests</th><th>Cache Hits</th><th>Total Tokens</th><th>Cached Tokens</th></tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="p in providers">
+                                <tr>
+                                    <td x-text="p.provider"></td>
+                                    <td x-text="p.request_count"></td>
+                                    <td x-text="p.cache_hits"></td>
+                                    <td x-text="formatNumber(p.total_tokens)"></td>
+                                    <td x-text="formatNumber(p.cached_tokens)"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </figure>
+            </section>
+
+            <section>
                 <h5>Model Breakdown</h5>
                 <figure>
                     <table role="grid">
@@ -189,6 +211,7 @@
                 tab: 'overview',
                 summary: {},
                 models: [],
+                providers: [],
                 daily: [],
                 logs: [],
                 selectedLog: null,
@@ -221,6 +244,7 @@
                     const params = '?days=' + this.days;
                     fetch('/__report/summary' + params).then(res => res.json()).then(data => this.summary = data);
                     fetch('/__report/models' + params).then(res => res.json()).then(data => this.models = data);
+                    fetch('/__report/providers' + params).then(res => res.json()).then(data => this.providers = data);
                     fetch('/__report/daily' + params).then(res => res.json()).then(data => {
                         this.daily = data;
                         this.renderChart();

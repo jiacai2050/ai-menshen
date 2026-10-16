@@ -452,6 +452,52 @@ func (s *Storage) ModelUsageReports(days int) ([]ModelUsageReport, error) {
 	return reports, nil
 }
 
+func (s *Storage) ProviderUsageReports(days int) ([]ProviderUsageReport, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			COALESCE(NULLIF(rl.provider, ''), '(unknown)') AS provider,
+			COUNT(*) AS request_count,
+			SUM(CASE WHEN rs.from_cache = 1 THEN 1 ELSE 0 END) AS cache_hits,
+			SUM(COALESCE(ul.prompt_tokens, 0)) AS prompt_tokens,
+			SUM(COALESCE(ul.completion_tokens, 0)) AS completion_tokens,
+			SUM(COALESCE(ul.total_tokens, 0)) AS total_tokens,
+			SUM(COALESCE(ul.cached_tokens, 0)) AS cached_tokens
+		FROM request_logs rl
+		JOIN response_logs rs ON rs.request_id = rl.id
+		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
+		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
+		GROUP BY rl.provider
+		ORDER BY total_tokens DESC, request_count DESC
+	`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return nil, fmt.Errorf("query provider usage report: %w", err)
+	}
+	defer rows.Close()
+
+	reports := make([]ProviderUsageReport, 0)
+	for rows.Next() {
+		var report ProviderUsageReport
+		if err := rows.Scan(
+			&report.Provider,
+			&report.RequestCount,
+			&report.CacheHits,
+			&report.PromptTokens,
+			&report.CompletionTokens,
+			&report.TotalTokens,
+			&report.CachedTokens,
+		); err != nil {
+			return nil, fmt.Errorf("scan provider usage report: %w", err)
+		}
+		reports = append(reports, report)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate provider usage report: %w", err)
+	}
+
+	return reports, nil
+}
+
 func (s *Storage) Close() error {
 	s.stopping.Store(true)
 	close(s.closed)

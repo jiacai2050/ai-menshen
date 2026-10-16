@@ -62,6 +62,16 @@ type ModelUsageReport struct {
 	CachedTokens     int64  `json:"cached_tokens"`
 }
 
+type ProviderUsageReport struct {
+	Provider         string `json:"provider"`
+	RequestCount     int64  `json:"request_count"`
+	CacheHits        int64  `json:"cache_hits"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	CachedTokens     int64  `json:"cached_tokens"`
+}
+
 type LogEntry struct {
 	ID                  string `json:"id"`
 	CreatedAt           int64  `json:"created_at"`

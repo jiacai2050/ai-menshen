@@ -22,6 +22,7 @@ import (
 const (
 	authHeaderName      = "Authorization"
 	reportModelsPath    = "/__report/models"
+	reportProvidersPath = "/__report/providers"
 	reportSummaryPath   = "/__report/summary"
 	reportDailyPath     = "/__report/daily"
 	reportLogsPath      = "/__report/logs"
@@ -193,6 +194,9 @@ func (g *Gateway) ServeWebHTTP(w http.ResponseWriter, r *http.Request) {
 		case reportModelsPath:
 			g.handleModelReport(w, r)
 			return
+		case reportProvidersPath:
+			g.handleProviderReport(w, r)
+			return
 		case reportSummaryPath:
 			g.handleSummaryReport(w, r)
 			return
@@ -292,6 +296,7 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if resp == nil {
+		logError("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds())
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
@@ -304,7 +309,8 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logError("[%s] failed to read upstream response: %v", requestLog.ID, err)
+		logError("[%s] [%s] failed to read upstream response: %v", requestLog.ID, requestLog.Provider, err)
+		logError("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds())
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
@@ -320,7 +326,7 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 
 	usage, err := ExtractUsage(requestLog.ID, responseBody)
 	if err != nil {
-		logError("[%s] usage extraction failed: %v", requestLog.ID, err)
+		logError("[%s] [%s] usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
 	}
 
 	responseLog := ResponseLog{
@@ -334,10 +340,10 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(responseBody); err != nil {
-		logError("[%s] write response failed: %v", requestLog.ID, err)
+		logError("[%s] [%s] write response failed: %v", requestLog.ID, requestLog.Provider, err)
 	}
 
-	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
+	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
 func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog RequestLog, provider ProviderConfig) {
@@ -353,6 +359,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	}
 
 	if resp == nil {
+		logError("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds())
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:  requestLog.ID,
 			StatusCode: http.StatusBadGateway,
@@ -388,14 +395,14 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 		if n > 0 {
 			chunk := buffer[:n]
 			if _, err := w.Write(chunk); err != nil {
-				logError("[%s] stream response write failed: %v", requestLog.ID, err)
+				logError("[%s] [%s] stream response write failed: %v", requestLog.ID, requestLog.Provider, err)
 				break
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 			if err := usageExtractor.Write(chunk); err != nil {
-				logError("[%s] stream usage extraction failed: %v", requestLog.ID, err)
+				logError("[%s] [%s] stream usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
 				// Do not break, keep proxying the stream
 			}
 			if captured != nil {
@@ -409,7 +416,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 			break
 		}
 		if readErr != nil {
-			logError("[%s] stream response copy failed: %v", requestLog.ID, readErr)
+			logError("[%s] [%s] stream response copy failed: %v", requestLog.ID, requestLog.Provider, readErr)
 			readFailed = true
 			break
 		}
@@ -421,7 +428,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	}
 
 	if err := usageExtractor.Finalize(); err != nil {
-		logError("[%s] stream usage extraction failed: %v", requestLog.ID, err)
+		logError("[%s] [%s] stream usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
 	}
 
 	if captured != nil && captured.Len() > 0 {
@@ -450,7 +457,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	}
 	g.saveExchange(requestLog, responseLog, usageExtractor.Usage())
 
-	logInfo("[%s] [%d] %s %s (%.3fs)", requestLog.ID, statusCode, r.Method, r.URL.String(), elapsed.Seconds())
+	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, statusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
 
 func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, startedAt time.Time, requestLog RequestLog, cached *CachedResponse, isStream bool) {
@@ -477,7 +484,7 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 	w.WriteHeader(cached.StatusCode)
 
 	if _, err := w.Write(cached.ResponseBody); err != nil {
-		logError("[%s] write cached response failed: %v", requestLog.ID, err)
+		logError("[%s] [%s] write cached response failed: %v", requestLog.ID, requestLog.Provider, err)
 	}
 
 	if isStream {
@@ -490,7 +497,7 @@ func (g *Gateway) serveCachedResponse(w http.ResponseWriter, r *http.Request, st
 	if isStream {
 		logMsg = "stream cache hit"
 	}
-	logInfo("[%s] [%d] %s %s (%.3fs, %s)", requestLog.ID, cached.StatusCode, r.Method, r.URL.String(), duration.Seconds(), logMsg)
+	logInfo("[%s] [%s] [%d] %s %s (%.3fs, %s)", requestLog.ID, requestLog.Provider, cached.StatusCode, r.Method, r.URL.String(), duration.Seconds(), logMsg)
 }
 
 func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
@@ -499,6 +506,19 @@ func (g *Gateway) handleModelReport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logError("model report error: %v", err)
 		http.Error(w, "failed to query model report", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(reports)
+}
+
+func (g *Gateway) handleProviderReport(w http.ResponseWriter, r *http.Request) {
+	days := g.getDays(r)
+	reports, err := g.storage.ProviderUsageReports(days)
+	if err != nil {
+		logError("provider report error: %v", err)
+		http.Error(w, "failed to query provider report", http.StatusInternalServerError)
 		return
 	}
 
@@ -605,7 +625,7 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	provider := g.pickProvider()
 	resp, duration, err := g.forwardUpstream(r, r.Body, provider)
 	if err != nil {
-		logError("passthrough upstream request failed: %v", err)
+		logError("[passthrough] [%s] upstream request failed: %v", provider.Name, err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
@@ -614,11 +634,11 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		logError("passthrough response copy failed: %v", err)
+		logError("[passthrough] [%s] response copy failed: %v", provider.Name, err)
 	}
 
 	if g.cfg.Verbose {
-		logInfo("[passthrough] [%d] %s %s (%.3fs)", resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
+		logInfo("[passthrough] [%s] [%d] %s %s (%.3fs)", provider.Name, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 	}
 }
 

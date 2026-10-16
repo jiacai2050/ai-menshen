@@ -1,6 +1,7 @@
 package aimenshen
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPickProviderSkipsZeroWeightProviders(t *testing.T) {
@@ -206,5 +208,95 @@ func TestServeAPIHTTPFailover500FollowedByNetworkErrorDoesNotPanic(t *testing.T)
 		if rec.Code != http.StatusInternalServerError && rec.Code != http.StatusBadGateway {
 			t.Fatalf("status code = %d, want 500 or 502", rec.Code)
 		}
+	}
+}
+
+func TestProviderUsageReports(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "report_test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	p100 := int64(100)
+	c50 := int64(50)
+	t150 := int64(150)
+	ca20 := int64(20)
+
+	// Insert exchange for provider openai
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-1", CreatedAt: time.Now(), Model: "gpt-4o", Provider: "openai", Path: "/chat/completions"},
+		ResponseLog{RequestID: "req-1", StatusCode: 200, DurationMS: 120, FromCache: false},
+		&UsageLog{RequestID: "req-1", PromptTokens: &p100, CompletionTokens: &c50, TotalTokens: &t150, CachedTokens: &ca20},
+	)
+
+	// Insert cached exchange for provider openai
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-2", CreatedAt: time.Now(), Model: "gpt-4o", Provider: "openai", Path: "/chat/completions"},
+		ResponseLog{RequestID: "req-2", StatusCode: 200, DurationMS: 5, FromCache: true},
+		nil,
+	)
+
+	// Insert exchange for provider deepseek
+	p200 := int64(200)
+	c100 := int64(100)
+	t300 := int64(300)
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-3", CreatedAt: time.Now(), Model: "deepseek-chat", Provider: "deepseek", Path: "/chat/completions"},
+		ResponseLog{RequestID: "req-3", StatusCode: 200, DurationMS: 200, FromCache: false},
+		&UsageLog{RequestID: "req-3", PromptTokens: &p200, CompletionTokens: &c100, TotalTokens: &t300},
+	)
+
+	reports, err := storage.ProviderUsageReports(7)
+	if err != nil {
+		t.Fatalf("ProviderUsageReports() error = %v", err)
+	}
+
+	if len(reports) != 2 {
+		t.Fatalf("len(reports) = %d, want 2", len(reports))
+	}
+
+	byProvider := map[string]ProviderUsageReport{}
+	for _, r := range reports {
+		byProvider[r.Provider] = r
+	}
+
+	deepseek, ok := byProvider["deepseek"]
+	if !ok || deepseek.TotalTokens != 300 || deepseek.RequestCount != 1 {
+		t.Fatalf("deepseek report = %+v", deepseek)
+	}
+
+	openai, ok := byProvider["openai"]
+	if !ok || openai.TotalTokens != 150 || openai.RequestCount != 2 || openai.CacheHits != 1 || openai.CachedTokens != 20 {
+		t.Fatalf("openai report = %+v", openai)
+	}
+
+	// Test Gateway HTTP endpoint /__report/providers
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"openai": {Name: "openai", BaseURL: "https://api.openai.com", Weight: 1},
+		},
+		Storage: StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/__report/providers?days=7", nil)
+	gateway.ServeWebHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", rec.Code)
+	}
+
+	var endpointReports []ProviderUsageReport
+	if err := json.Unmarshal(rec.Body.Bytes(), &endpointReports); err != nil {
+		t.Fatalf("unmarshal error = %v", err)
+	}
+	if len(endpointReports) != 2 {
+		t.Fatalf("endpoint len(reports) = %d, want 2", len(endpointReports))
 	}
 }
