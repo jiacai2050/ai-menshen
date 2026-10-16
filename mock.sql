@@ -9,7 +9,7 @@ DELETE FROM response_logs;
 DELETE FROM request_logs;
 
 -- 2. Generate 1000 requests spread over the last 30 days
-INSERT INTO request_logs (id, created_at, path, model, cache_key)
+INSERT INTO request_logs (id, created_at, path, model, provider, cache_key)
 WITH RECURSIVE cnt(x) AS (
     SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 1000
 )
@@ -21,6 +21,10 @@ SELECT
         WHEN 0 THEN 'gpt-4o'
         WHEN 1 THEN 'gpt-4.1-mini'
         ELSE 'claude-3-5-sonnet'
+    END,
+    CASE (x % 2)
+        WHEN 0 THEN 'openai'
+        ELSE 'anthropic'
     END,
     'cache-key-' || (x % 200)
 FROM cnt;

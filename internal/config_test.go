@@ -9,7 +9,7 @@ import (
 
 func TestLoadConfigProviderWeightUsesIntValue(t *testing.T) {
 	cfg := loadTestConfig(t, `
-[[providers]]
+[providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 weight = 2
@@ -18,14 +18,21 @@ weight = 2
 path = "./test.db"
 `)
 
-	if got := cfg.Providers[0].Weight; got != 2 {
+	provider, ok := cfg.Providers["openai"]
+	if !ok {
+		t.Fatalf("Providers = %v, want provider openai", cfg.Providers)
+	}
+	if got := provider.Weight; got != 2 {
 		t.Fatalf("Weight = %d, want 2", got)
+	}
+	if got := provider.Name; got != "openai" {
+		t.Fatalf("Name = %q, want openai", got)
 	}
 }
 
 func TestLoadConfigDefaultsWebListen(t *testing.T) {
 	cfg := loadTestConfig(t, `
-	[[providers]]
+	[providers.openai]
 	base_url = "https://api.openai.com/v1"
 	api_key = "sk-test"
 	weight = 1
@@ -41,7 +48,7 @@ func TestLoadConfigDefaultsWebListen(t *testing.T) {
 
 func TestLoadConfigRejectsNegativeProviderWeight(t *testing.T) {
 	_, err := LoadConfig(writeTestConfig(t, `
-[[providers]]
+[providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 weight = -1
@@ -56,7 +63,7 @@ path = "./test.db"
 
 func TestLoadConfigRequiresPositiveProviderWeight(t *testing.T) {
 	_, err := LoadConfig(writeTestConfig(t, `
-[[providers]]
+[providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 weight = 0
@@ -71,7 +78,7 @@ path = "./test.db"
 
 func TestLoadConfigRequiresExplicitPositiveWeight(t *testing.T) {
 	_, err := LoadConfig(writeTestConfig(t, `
-[[providers]]
+[providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "sk-test"
 
@@ -80,6 +87,43 @@ path = "./test.db"
 `))
 	if err == nil || !strings.Contains(err.Error(), "at least one provider with positive weight") {
 		t.Fatalf("LoadConfig() error = %v, want explicit positive weight validation", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidProviderName(t *testing.T) {
+	for _, badName := range []string{`"my provider"`, `"my.provider"`, `"my@provider"`} {
+		_, err := LoadConfig(writeTestConfig(t, `
+[providers.`+badName+`]
+base_url = "https://api.openai.com/v1"
+api_key = "sk-test"
+weight = 1
+
+[storage.sqlite]
+path = "./test.db"
+`))
+		if err == nil || !strings.Contains(err.Error(), "name must match") {
+			t.Fatalf("LoadConfig() with name %s error = %v, want provider name validation", badName, err)
+		}
+	}
+}
+
+func TestLoadConfigRejectsDuplicateProviderName(t *testing.T) {
+	_, err := LoadConfig(writeTestConfig(t, `
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key = "sk-test"
+weight = 1
+
+[providers.openai]
+base_url = "https://api.openai.com/v2"
+api_key = "sk-test"
+weight = 1
+
+[storage.sqlite]
+path = "./test.db"
+`))
+	if err == nil {
+		t.Fatalf("LoadConfig() error = nil, want duplicate provider name rejection")
 	}
 }
 

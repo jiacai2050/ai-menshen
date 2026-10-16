@@ -204,7 +204,8 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | | `user` | Username for **Dashboard** (Basic Auth) | - |
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
 | | `token` | Token for **API Requests** (Bearer Auth) | - |
-| **Providers** | `base_url` | Upstream endpoint (Required) | - |
+| **Providers** | *(table key)* | Provider name (`[providers.<name>]`); must match `[A-Za-z0-9_-]+`, used in logs & audit DB | - |
+| | `base_url` | Upstream endpoint (Required) | - |
 | | `api_key` | Upstream key | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |
@@ -221,21 +222,26 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 
 ## Weighted Providers
 
-Use `providers[].weight` to control how often each upstream is selected.
+Providers are defined as TOML tables keyed by name, e.g. `[providers.openai]`. The
+name is the provider's identity: it shows up in logs, the audit database, and the
+dashboard. Names must match `[A-Za-z0-9_-]+`; redefining the same name is a TOML
+parse error.
 
-- `weight = 0` disables that provider.
+Use `weight` to control how often each upstream is selected.
+
+- `weight = 0` disables that provider (the default when omitted).
 - Higher weights receive a larger share of requests.
 - At least one provider must have `weight > 0`, or startup fails.
 
 Example:
 
 ```toml
-[[providers]]
+[providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key = "${OPENAI_API_KEY}"
 weight = 8
 
-[[providers]]
+[providers.deepseek]
 base_url = "https://api.deepseek.com"
 api_key = "${DEEPSEEK_API_KEY}"
 weight = 2
@@ -248,9 +254,9 @@ In this example, requests will trend toward an `80% / 20%` split over time. The 
 When `failover.enable = true` (the default), a failed request is automatically retried against the remaining providers:
 
 - **Triggers**: network errors, HTTP 5xx, or 429 (Too Many Requests).
-- **Order**: the first provider is chosen by weighted random; on failure, the remaining providers are tried in config order.
+- **Order**: the first provider is chosen by weighted random; on failure, the remaining providers are tried from the heaviest to the lightest (ties broken by name, so the order is deterministic).
 - **Streaming**: failover only happens before any data has been sent to the client. Once SSE chunks are flowing, the stream is not retried.
 - **Passthrough**: non-auditable paths (e.g., `/models`) use a single provider and do not failover.
 - **Graceful degradation**: if every provider fails, the last upstream response (including its original status code and body) is passed through to the client rather than being replaced with a generic 502.
 
-No extra configuration is needed—just define multiple `[[providers]]` blocks and failover works automatically.
+No extra configuration is needed—just define multiple `[providers.<name>]` tables and failover works automatically.

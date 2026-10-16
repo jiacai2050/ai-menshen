@@ -114,6 +114,7 @@ func (s *Storage) init() error {
 		`CREATE TABLE IF NOT EXISTS request_logs (
 			id TEXT PRIMARY KEY,
 			model TEXT NOT NULL,
+			provider TEXT NOT NULL DEFAULT '',
 			path TEXT NOT NULL,
 			cache_key TEXT,
 			created_at INTEGER NOT NULL
@@ -188,9 +189,10 @@ func (s *Storage) saveExchangeSync(request RequestLog, response ResponseLog, usa
 
 	// 1. Metadata
 	if _, err := tx.Exec(
-		`INSERT INTO request_logs (id, model, path, cache_key, created_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO request_logs (id, model, provider, path, cache_key, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		request.ID,
 		request.Model,
+		request.Provider,
 		request.Path,
 		nullIfEmpty(request.CacheKey),
 		request.CreatedAt.UnixMilli(),
@@ -279,7 +281,7 @@ func (s *Storage) FindCachedResponse(cacheKey string, maxAge int64) (*CachedResp
 func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 	rows, err := s.db.Query(`
 		SELECT 
-			rl.id, rl.created_at, rl.model, rl.path, 
+			rl.id, rl.created_at, rl.model, COALESCE(rl.provider, ''), rl.path, 
 			rs.status_code, rs.duration_ms, 
 			COALESCE(ul.total_tokens, 0),
 			COALESCE(SUBSTR(rb.content, 1, 200), ''),
@@ -303,7 +305,7 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 		var l LogEntry
 		var reqPrev, resPrev []byte
 		if err := rows.Scan(
-			&l.ID, &l.CreatedAt, &l.Model, &l.Path,
+			&l.ID, &l.CreatedAt, &l.Model, &l.Provider, &l.Path,
 			&l.StatusCode, &l.DurationMS, &l.TotalTokens,
 			&reqPrev, &resPrev,
 		); err != nil {
@@ -321,7 +323,7 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 	var resBody, reqBody []byte
 	err := s.db.QueryRow(`
 		SELECT 
-			rl.id, rl.created_at, rl.model, rl.path, 
+			rl.id, rl.created_at, rl.model, COALESCE(rl.provider, ''), rl.path, 
 			rs.status_code, rs.duration_ms, 
 			COALESCE(rsb.content, ''),
 			COALESCE(rb.content, ''),
@@ -333,7 +335,7 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 		LEFT JOIN response_bodies rsb ON rsb.request_id = rl.id
 		WHERE rl.id = ?
 	`, id).Scan(
-		&d.ID, &d.CreatedAt, &d.Model, &d.Path,
+		&d.ID, &d.CreatedAt, &d.Model, &d.Provider, &d.Path,
 		&d.StatusCode, &d.DurationMS, &resBody,
 		&reqBody,
 		&d.TotalTokens,

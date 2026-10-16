@@ -7,6 +7,7 @@ type RequestLog struct {
 	CreatedAt   time.Time
 	Path        string
 	Model       string
+	Provider    string
 	CacheKey    string
 	RequestBody []byte
 }
@@ -65,6 +66,7 @@ type LogEntry struct {
 	ID                  string `json:"id"`
 	CreatedAt           int64  `json:"created_at"`
 	Model               string `json:"model"`
+	Provider            string `json:"provider"`
 	Path                string `json:"path"`
 	StatusCode          int    `json:"status_code"`
 	DurationMS          int64  `json:"duration_ms"`

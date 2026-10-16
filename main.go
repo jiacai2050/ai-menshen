@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -84,10 +86,10 @@ func run(configPath string) error {
 
 	log.Printf("ai-menshen API started on %s", cfg.Listen)
 	log.Printf("ai-menshen Web UI started on %s", cfg.Web.Listen)
-	for i, provider := range cfg.Providers {
-		log.Printf("  provider[%d]: %s (weight=%d)", i, provider.BaseURL, provider.Weight)
+	for _, provider := range sortedProviders(cfg.Providers) {
+		log.Printf("  provider[%s]: %s (weight=%d)", provider.Name, provider.BaseURL, provider.Weight)
 		if provider.Model != "" {
-			log.Printf("  provider[%d] model override: %s", i, provider.Model)
+			log.Printf("  provider[%s] model override: %s", provider.Name, provider.Model)
 		}
 	}
 	if len(cfg.Providers) > 1 {
@@ -131,4 +133,16 @@ func run(configPath string) error {
 		return err
 	}
 	return webServer.Shutdown(shutdownCtx)
+}
+
+// sortedProviders returns providers ordered by name so startup logs are stable.
+func sortedProviders(providers map[string]aimenshen.ProviderConfig) []aimenshen.ProviderConfig {
+	sorted := make([]aimenshen.ProviderConfig, 0, len(providers))
+	for _, provider := range providers {
+		sorted = append(sorted, provider)
+	}
+	slices.SortFunc(sorted, func(a, b aimenshen.ProviderConfig) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return sorted
 }

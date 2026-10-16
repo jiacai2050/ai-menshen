@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Added
+- Providers are now keyed by name (`[providers.openai]`); the name identifies the provider in logs, the audit DB, and the dashboard
+- `request_logs.provider` column records which provider served each request (migrate older databases with `python3 scripts/migrate_provider_column.py <db>`)
+
 ### Changed
+- **Breaking**: `providers` uses TOML tables keyed by name (`[providers.<name>]`) instead of `[[providers]]` arrays; names must match `[A-Za-z0-9_-]+` and be unique
+- Failover order is deterministic: heaviest `weight` first, ties broken by name (previously config order); logs identify providers by name
 - Performance: SSE usage extraction skips JSON decoding for events without a `usage` field and reuses its line buffer (~6-7x faster per stream chunk set)
 - Performance: request rewrites (provider model override, `stream_options` injection) splice untouched top-level fields verbatim instead of re-encoding the whole payload
 - Performance: provider base URLs are parsed once at startup instead of per request; failed upstream bodies are drained with a size cap before closing

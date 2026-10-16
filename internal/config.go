@@ -7,22 +7,23 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
-	Listen    string           `toml:"listen"`
-	Verbose   bool             `toml:"verbose"`
-	Auth      AuthConfig       `toml:"auth"`
-	Web       WebConfig        `toml:"web"`
-	Providers []ProviderConfig `toml:"providers"`
-	Upstream  UpstreamConfig   `toml:"upstream"`
-	Failover  FailoverConfig   `toml:"failover"`
-	Storage   StorageConfig    `toml:"storage"`
-	Cache     CacheConfig      `toml:"cache"`
-	Logging   LoggingConfig    `toml:"logging"`
+	Listen    string                    `toml:"listen"`
+	Verbose   bool                      `toml:"verbose"`
+	Auth      AuthConfig                `toml:"auth"`
+	Web       WebConfig                 `toml:"web"`
+	Providers map[string]ProviderConfig `toml:"providers"`
+	Upstream  UpstreamConfig            `toml:"upstream"`
+	Failover  FailoverConfig            `toml:"failover"`
+	Storage   StorageConfig             `toml:"storage"`
+	Cache     CacheConfig               `toml:"cache"`
+	Logging   LoggingConfig             `toml:"logging"`
 }
 
 type WebConfig struct {
@@ -40,7 +41,12 @@ type AuthConfig struct {
 	Token    string `toml:"token"`
 }
 
+// providerNamePattern restricts provider names (the TOML table key) to
+// bare-key style identifiers so they are safe in logs and the SQLite schema.
+var providerNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 type ProviderConfig struct {
+	Name    string            `toml:"-"` // set from the providers table key at load time
 	BaseURL string            `toml:"base_url"`
 	APIKey  string            `toml:"api_key"`
 	Headers map[string]string `toml:"headers"`
@@ -169,42 +175,48 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	hasPositiveWeight := false
-	for i, provider := range cfg.Providers {
-		cfg.Providers[i].APIKey = os.ExpandEnv(provider.APIKey)
+	for name, provider := range cfg.Providers {
+		if !providerNamePattern.MatchString(name) {
+			return cfg, fmt.Errorf("config.providers.%s: name must match %s", name, providerNamePattern)
+		}
+		provider.Name = name
+		provider.APIKey = os.ExpandEnv(provider.APIKey)
 		if len(provider.Headers) > 0 {
 			expandedHeaders := make(map[string]string, len(provider.Headers))
 			for k, v := range provider.Headers {
 				expandedHeaders[k] = os.ExpandEnv(v)
 			}
-			cfg.Providers[i].Headers = expandedHeaders
+			provider.Headers = expandedHeaders
 		}
 
 		if strings.TrimSpace(provider.BaseURL) == "" {
-			return cfg, fmt.Errorf("config.providers[%d].base_url is required", i)
+			return cfg, fmt.Errorf("config.providers.%s.base_url is required", name)
 		}
 
 		parsed, err := url.Parse(provider.BaseURL)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return cfg, fmt.Errorf("config.providers[%d].base_url is invalid", i)
+			return cfg, fmt.Errorf("config.providers.%s.base_url is invalid", name)
 		}
 
-		cfg.Providers[i].BaseURL = strings.TrimRight(provider.BaseURL, "/")
+		provider.BaseURL = strings.TrimRight(provider.BaseURL, "/")
 
 		if provider.Proxy != "" {
 			expanded := os.ExpandEnv(provider.Proxy)
 			proxyParsed, err := url.Parse(expanded)
 			if err != nil || proxyParsed.Scheme == "" || proxyParsed.Host == "" {
-				return cfg, fmt.Errorf("config.providers[%d].proxy is invalid", i)
+				return cfg, fmt.Errorf("config.providers.%s.proxy is invalid", name)
 			}
-			cfg.Providers[i].Proxy = proxyParsed.String()
+			provider.Proxy = proxyParsed.String()
 		}
 
-		if cfg.Providers[i].Weight < 0 {
-			return cfg, fmt.Errorf("config.providers[%d].weight must not be negative", i)
+		if provider.Weight < 0 {
+			return cfg, fmt.Errorf("config.providers.%s.weight must not be negative", name)
 		}
-		if cfg.Providers[i].Weight > 0 {
+		if provider.Weight > 0 {
 			hasPositiveWeight = true
 		}
+
+		cfg.Providers[name] = provider
 	}
 
 	if !hasPositiveWeight {

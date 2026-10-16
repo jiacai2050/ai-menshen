@@ -107,7 +107,8 @@
                     <thead>
                         <tr>
                             <th style="width: 15%">Time</th>
-                            <th style="width: 15%">Model</th>
+                            <th style="width: 10%">Provider</th>
+                            <th style="width: 12%">Model</th>
                             <th style="width: 8%">Status</th>
                             <th style="width: 10%">Latency</th>
                             <th>Preview (Req/Res)</th>
@@ -118,6 +119,7 @@
                         <template x-for="log in logs">
                             <tr class="log-row" @click="showDetail(log.id)">
                                 <td x-text="formatDate(log.created_at)"></td>
+                                <td x-text="log.provider || '-'"></td>
                                 <td x-text="log.model || '-'"></td>
                                 <td :class="log.status_code < 400 ? 'status-ok' : 'status-error'" x-text="log.status_code"></td>
                                 <td x-text="formatDuration(log.duration_ms)"></td>
@@ -143,6 +145,7 @@
                 <div class="grid">
                     <div>
                         <strong>Time:</strong> <span x-text="formatDate(selectedLog?.created_at)"></span><br>
+                        <strong>Provider:</strong> <span x-text="selectedLog?.provider || '-'"></span><br>
                         <strong>Model:</strong> <span x-text="selectedLog?.model"></span>
                     </div>
                     <div>
