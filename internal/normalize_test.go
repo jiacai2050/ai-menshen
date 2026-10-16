@@ -64,7 +64,7 @@ func TestBuildCacheKeyExplicit(t *testing.T) {
 				t.Fatalf("failed to decode payload: %s", tt.payload)
 			}
 
-			got, err := buildCacheKey(tt.path, p)
+			got, err := buildCacheKey(tt.path, p.values)
 			if err != nil {
 				t.Fatalf("buildCacheKey() error = %v", err)
 			}
@@ -142,7 +142,7 @@ func TestAnalyzeRequest(t *testing.T) {
 			if expected.CacheKey == "" && len(expected.EffectiveBody) > 0 {
 				payload, ok := decodeJSONObject(expected.EffectiveBody)
 				if ok {
-					cacheKey, err := buildCacheKey(tt.path, payload)
+					cacheKey, err := buildCacheKey(tt.path, payload.values)
 					if err != nil {
 						t.Fatalf("buildCacheKey() error = %v", err)
 					}

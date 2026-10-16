@@ -5,6 +5,13 @@ import (
 	"encoding/json"
 )
 
+var (
+	sseNewline     = []byte("\n")
+	sseDataPrefix  = []byte("data:")
+	sseDonePayload = []byte("[DONE]")
+	usageFieldKey  = []byte(`"usage"`)
+)
+
 func ExtractUsage(requestID string, body []byte) (*UsageLog, error) {
 	return extractUsageFromJSON(requestID, body)
 }
@@ -19,24 +26,28 @@ func NewSSEUsageExtractor(requestID string) *SSEUsageExtractor {
 	return &SSEUsageExtractor{requestID: requestID}
 }
 
+// Write buffers chunks just long enough to split complete lines. The leftover
+// is compacted to the front of the buffer so the backing array is reused
+// instead of reallocating on every chunk.
 func (e *SSEUsageExtractor) Write(chunk []byte) error {
 	e.pending = append(e.pending, chunk...)
 
+	rest := e.pending
 	for {
-		index := bytes.IndexByte(e.pending, '\n')
-		if index < 0 {
-			return nil
+		line, remainder, ok := bytes.Cut(rest, sseNewline)
+		if !ok {
+			break
 		}
+		rest = remainder
 
-		line := bytes.TrimSpace(e.pending[:index])
-		e.pending = e.pending[index+1:]
-
-		if usage, err := extractUsageFromSSELine(e.requestID, line); err != nil {
+		if usage, err := extractUsageFromSSELine(e.requestID, bytes.TrimSpace(line)); err != nil {
 			return err
 		} else if usage != nil {
 			e.usage = usage
 		}
 	}
+	e.pending = e.pending[:copy(e.pending, rest)]
+	return nil
 }
 
 func (e *SSEUsageExtractor) Finalize() error {
@@ -52,7 +63,7 @@ func (e *SSEUsageExtractor) Finalize() error {
 		e.usage = usage
 	}
 
-	e.pending = nil
+	e.pending = e.pending[:0]
 	return nil
 }
 
@@ -61,12 +72,12 @@ func (e *SSEUsageExtractor) Usage() *UsageLog {
 }
 
 func extractUsageFromSSELine(requestID string, line []byte) (*UsageLog, error) {
-	if !bytes.HasPrefix(line, []byte("data:")) {
+	if !bytes.HasPrefix(line, sseDataPrefix) {
 		return nil, nil
 	}
 
-	payload := bytes.TrimSpace(line[len("data:"):])
-	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+	payload := bytes.TrimSpace(line[len(sseDataPrefix):])
+	if len(payload) == 0 || bytes.Equal(payload, sseDonePayload) {
 		return nil, nil
 	}
 
@@ -89,6 +100,14 @@ type promptTokenDetails struct {
 }
 
 func extractUsageFromJSON(requestID string, body []byte) (*UsageLog, error) {
+	// Fast path: without a "usage" key there is nothing to extract, so skip
+	// the full JSON decode. The check can only produce false positives (e.g.
+	// the key appearing inside generated text), which fall through to the
+	// regular decode below.
+	if !bytes.Contains(body, usageFieldKey) {
+		return nil, nil
+	}
+
 	var resp usageResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, nil

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -63,10 +64,15 @@ func TestForwardUpstreamUsesSelectedProvider(t *testing.T) {
 		APIKey:  "sk-upstream",
 		Headers: map[string]string{"X-Upstream-Key": "provider"},
 	}
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
 	gateway := &Gateway{
 		clients: map[string]*http.Client{
 			"": server.Client(),
 		},
+		bases: map[string]*url.URL{server.URL: base},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", http.NoBody)

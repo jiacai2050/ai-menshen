@@ -40,6 +40,7 @@ type Gateway struct {
 	activeTotalWeight int
 	storage           *Storage
 	clients           map[string]*http.Client // keyed by provider proxy URL ("" = use env proxy settings)
+	bases             map[string]*url.URL     // keyed by provider base URL, parsed once at startup
 }
 
 func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
@@ -50,7 +51,15 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	clients := make(map[string]*http.Client)
+	bases := make(map[string]*url.URL, len(activeProviders))
 	for _, p := range activeProviders {
+		if _, exists := bases[p.BaseURL]; !exists {
+			base, err := url.Parse(p.BaseURL)
+			if err != nil {
+				return nil, fmt.Errorf("parse provider base URL %q: %w", p.BaseURL, err)
+			}
+			bases[p.BaseURL] = base
+		}
 		if _, exists := clients[p.Proxy]; exists {
 			continue
 		}
@@ -67,6 +76,7 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 		activeTotalWeight: activeTotalWeight,
 		storage:           storage,
 		clients:           clients,
+		bases:             bases,
 	}
 
 	return service, nil
@@ -600,11 +610,16 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// drainLimit caps how much of a failed upstream body is drained before the
+// connection is dropped, so a huge error body cannot stall a request.
+const drainLimit = 64 << 10
+
 func drainAndCloseBody(resp *http.Response) {
-	if resp != nil && resp.Body != nil {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+	if resp == nil || resp.Body == nil {
+		return
 	}
+	_, _ = io.CopyN(io.Discard, resp.Body, drainLimit)
+	resp.Body.Close()
 }
 
 func (g *Gateway) failoverNonStream(r *http.Request, requestBody []byte, requestLog *RequestLog, tried ProviderConfig) (*http.Response, time.Duration, RequestMeta) {
@@ -648,12 +663,12 @@ func (g *Gateway) failoverNonStream(r *http.Request, requestBody []byte, request
 }
 
 func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {
-	targetURL, err := buildUpstreamURL(provider.BaseURL, r.URL)
-	if err != nil {
-		return nil, 0, err
+	base, ok := g.bases[provider.BaseURL]
+	if !ok {
+		return nil, 0, fmt.Errorf("no upstream base URL registered for %q", provider.BaseURL)
 	}
 
-	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, body)
+	upstreamRequest, err := http.NewRequestWithContext(r.Context(), r.Method, joinUpstreamURL(base, r.URL), body)
 	if err != nil {
 		return nil, 0, fmt.Errorf("create upstream request: %w", err)
 	}
@@ -686,16 +701,11 @@ func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderCon
 	}
 }
 
-func buildUpstreamURL(baseURL string, incoming *url.URL) (string, error) {
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("parse provider base URL: %w", err)
-	}
-
+func joinUpstreamURL(base, incoming *url.URL) string {
 	target := *base
 	target.Path = joinURLPath(base.Path, incoming.Path)
 	target.RawQuery = incoming.RawQuery
-	return target.String(), nil
+	return target.String()
 }
 
 func joinURLPath(basePath, requestPath string) string {
