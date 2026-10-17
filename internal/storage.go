@@ -455,8 +455,10 @@ func (s *Storage) DailyUsage(days int) ([]DailyUsage, error) {
 			SUM(COALESCE(ul.total_tokens, 0)) AS total_tokens,
 			SUM(COALESCE(ul.prompt_tokens, 0)) AS prompt_tokens,
 			SUM(COALESCE(ul.completion_tokens, 0)) AS completion_tokens,
-			COUNT(*) AS request_count
+			COUNT(*) AS request_count,
+			SUM(CASE WHEN rs.from_cache = 1 THEN 1 ELSE 0 END) AS cache_hits
 		FROM request_logs rl
+		LEFT JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
 		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 		GROUP BY date
@@ -470,7 +472,7 @@ func (s *Storage) DailyUsage(days int) ([]DailyUsage, error) {
 	var results []DailyUsage
 	for rows.Next() {
 		var d DailyUsage
-		if err := rows.Scan(&d.Date, &d.TotalTokens, &d.PromptTokens, &d.CompletionTokens, &d.RequestCount); err != nil {
+		if err := rows.Scan(&d.Date, &d.TotalTokens, &d.PromptTokens, &d.CompletionTokens, &d.RequestCount, &d.CacheHits); err != nil {
 			return nil, fmt.Errorf("scan daily usage: %w", err)
 		}
 		results = append(results, d)

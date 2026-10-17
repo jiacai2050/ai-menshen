@@ -55,13 +55,21 @@
             </div>
         </div>
 
-        <!-- Trend Chart -->
-        <section>
-            <h5>Usage Trend</h5>
-            <div class="chart-card">
-                <canvas id="usageChart"></canvas>
-            </div>
-        </section>
+        <!-- Trend Charts Grid -->
+        <div class="grid" style="margin-bottom: 2rem;">
+            <section style="margin-bottom: 0;">
+                <h5>Requests Trend</h5>
+                <div class="chart-card">
+                    <canvas id="requestsChart"></canvas>
+                </div>
+            </section>
+            <section style="margin-bottom: 0;">
+                <h5>Tokens Trend</h5>
+                <div class="chart-card">
+                    <canvas id="usageChart"></canvas>
+                </div>
+            </section>
+        </div>
 
         <!-- Provider Breakdown -->
         <section>
@@ -152,7 +160,8 @@
                 models: [],
                 providers: [],
                 daily: [],
-                chart: null,
+                requestsChart: null,
+                usageChart: null,
                 init() {
                     const urlParams = new URLSearchParams(window.location.search);
                     if (urlParams.has('days')) {
@@ -161,7 +170,7 @@
                     }
                     if (window.matchMedia) {
                         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-                            this.renderChart();
+                            this.renderCharts();
                         });
                     }
                     this.refreshData();
@@ -173,25 +182,89 @@
                     fetch('/__report/providers' + params).then(res => res.json()).then(data => this.providers = data || []);
                     fetch('/__report/daily' + params).then(res => res.json()).then(data => {
                         this.daily = data || [];
-                        this.renderChart();
+                        this.renderCharts();
                     });
                 },
-                renderChart() {
+                renderCharts() {
                     if (!this.daily || this.daily.length === 0) return;
-                    const canvas = document.getElementById('usageChart');
+                    this.renderRequestsChart();
+                    this.renderTokensChart();
+                },
+                renderRequestsChart() {
+                    const canvas = document.getElementById('requestsChart');
                     if (!canvas) return;
                     const ctx = canvas.getContext('2d');
-                    if (this.chart) this.chart.destroy();
+                    if (this.requestsChart) this.requestsChart.destroy();
 
                     const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
                     const textColor = isDark ? '#94a3b8' : '#64748b';
                     const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
-                    const promptBg = isDark ? 'rgba(56, 189, 248, 0.35)' : '#cce5ff';
-                    const promptBorder = isDark ? '#38bdf8' : '#0066cc';
+                    const directBg = isDark ? 'rgba(56, 189, 248, 0.35)' : '#cce5ff';
+                    const directBorder = isDark ? '#38bdf8' : '#0066cc';
+                    const cacheBg = isDark ? 'rgba(52, 211, 153, 0.35)' : '#d1e7dd';
+                    const cacheBorder = isDark ? '#34d399' : '#198754';
+
+                    this.requestsChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: this.daily.map(d => d.date),
+                            datasets: [{
+                                label: 'Direct Requests',
+                                data: this.daily.map(d => Math.max(0, d.request_count - (d.cache_hits || 0))),
+                                backgroundColor: directBg,
+                                borderColor: directBorder,
+                                borderWidth: 1
+                            }, {
+                                label: 'Cache Hits',
+                                data: this.daily.map(d => d.cache_hits || 0),
+                                backgroundColor: cacheBg,
+                                borderColor: cacheBorder,
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: {
+                                    stacked: true,
+                                    grid: { display: false },
+                                    ticks: { color: textColor }
+                                },
+                                y: {
+                                    stacked: true,
+                                    beginAtZero: true,
+                                    grid: { color: gridColor },
+                                    ticks: {
+                                        color: textColor,
+                                        precision: 0
+                                    }
+                                }
+                            },
+                            plugins: {
+                                legend: {
+                                    position: 'bottom',
+                                    labels: { color: textColor }
+                                }
+                            }
+                        }
+                    });
+                },
+                renderTokensChart() {
+                    const canvas = document.getElementById('usageChart');
+                    if (!canvas) return;
+                    const ctx = canvas.getContext('2d');
+                    if (this.usageChart) this.usageChart.destroy();
+
+                    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    const textColor = isDark ? '#94a3b8' : '#64748b';
+                    const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+                    const promptBg = isDark ? 'rgba(168, 85, 247, 0.35)' : '#ede9fe';
+                    const promptBorder = isDark ? '#c084fc' : '#7c3aed';
                     const compBg = isDark ? 'rgba(52, 211, 153, 0.35)' : '#d1e7dd';
                     const compBorder = isDark ? '#34d399' : '#198754';
 
-                    this.chart = new Chart(ctx, {
+                    this.usageChart = new Chart(ctx, {
                         type: 'bar',
                         data: {
                             labels: this.daily.map(d => d.date),

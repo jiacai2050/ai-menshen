@@ -608,7 +608,7 @@ func TestServeWebPages(t *testing.T) {
 		contains     string
 	}{
 		{"/", http.StatusOK, "Overview"},
-		{"/overview", http.StatusOK, "Overview"},
+		{"/overview", http.StatusOK, "Requests Trend"},
 		{"/logs", http.StatusOK, "Audit Logs"},
 		{"/logs/req-123456", http.StatusOK, "Audit Logs"},
 		{"/assets/pico.min.css", http.StatusOK, "Pico CSS"},
@@ -727,3 +727,82 @@ func TestRequestLogsMessagesCount(t *testing.T) {
 		t.Errorf("req-stream ResponseMessages = %d, want 1", l3.ResponseMessages)
 	}
 }
+
+func TestStorageDailyUsage(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_daily_usage.db")
+	storage, err := OpenStorage(StorageConfig{
+		SQLite: SQLiteConfig{Path: dbPath},
+	})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	// Insert direct request
+	req1 := RequestLog{
+		ID:        "req-direct",
+		CreatedAt: time.Now(),
+		Model:     "gpt-4o",
+	}
+	resp1 := ResponseLog{
+		RequestID:  "req-direct",
+		StatusCode: 200,
+		FromCache:  false,
+	}
+	p10 := int64(10)
+	c20 := int64(20)
+	t30 := int64(30)
+	usage1 := &UsageLog{
+		RequestID:        "req-direct",
+		PromptTokens:     &p10,
+		CompletionTokens: &c20,
+		TotalTokens:      &t30,
+	}
+	if err := storage.saveExchangeSync(req1, resp1, usage1); err != nil {
+		t.Fatalf("saveExchangeSync() error = %v", err)
+	}
+
+	// Insert cache hit request
+	req2 := RequestLog{
+		ID:        "req-cached",
+		CreatedAt: time.Now(),
+		Model:     "gpt-4o",
+	}
+	resp2 := ResponseLog{
+		RequestID:  "req-cached",
+		StatusCode: 200,
+		FromCache:  true,
+	}
+	ca30 := int64(30)
+	usage2 := &UsageLog{
+		RequestID:    "req-cached",
+		CachedTokens: &ca30,
+		TotalTokens:  &t30,
+	}
+	if err := storage.saveExchangeSync(req2, resp2, usage2); err != nil {
+		t.Fatalf("saveExchangeSync() error = %v", err)
+	}
+
+	daily, err := storage.DailyUsage(7)
+	if err != nil {
+		t.Fatalf("DailyUsage() error = %v", err)
+	}
+	if len(daily) != 1 {
+		t.Fatalf("len(daily) = %d, want 1", len(daily))
+	}
+
+	d := daily[0]
+	if d.RequestCount != 2 {
+		t.Errorf("d.RequestCount = %d, want 2", d.RequestCount)
+	}
+	if d.CacheHits != 1 {
+		t.Errorf("d.CacheHits = %d, want 1", d.CacheHits)
+	}
+	if d.PromptTokens != 10 {
+		t.Errorf("d.PromptTokens = %d, want 10", d.PromptTokens)
+	}
+	if d.CompletionTokens != 20 {
+		t.Errorf("d.CompletionTokens = %d, want 20", d.CompletionTokens)
+	}
+}
+

@@ -41,6 +41,7 @@ type DailyUsage struct {
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
 	RequestCount     int64  `json:"request_count"`
+	CacheHits        int64  `json:"cache_hits"`
 }
 
 type UsageSummary struct {
