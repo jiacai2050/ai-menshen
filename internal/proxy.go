@@ -221,9 +221,15 @@ func (g *Gateway) ServeWebHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		g.handleDashboard(w)
-		return
+	if r.Method == http.MethodGet {
+		if r.URL.Path == "/" || r.URL.Path == "/overview" {
+			g.handleOverview(w)
+			return
+		}
+		if r.URL.Path == "/logs" || strings.HasPrefix(r.URL.Path, "/logs/") {
+			g.handleLogsPage(w)
+			return
+		}
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/assets/") {
@@ -659,13 +665,23 @@ func (g *Gateway) getDays(r *http.Request) int {
 	return days
 }
 
-func (g *Gateway) handleDashboard(w http.ResponseWriter) {
+func (g *Gateway) handleOverview(w http.ResponseWriter) {
 	content, err := web.Assets.ReadFile("index.html")
 	if err != nil {
-		http.Error(w, "dashboard template not found", http.StatusNotFound)
+		http.Error(w, "overview page not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(content)
+}
+
+func (g *Gateway) handleLogsPage(w http.ResponseWriter) {
+	content, err := web.Assets.ReadFile("logs.html")
+	if err != nil {
+		http.Error(w, "logs page not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(content)
 }
 

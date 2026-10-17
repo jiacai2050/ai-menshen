@@ -81,6 +81,8 @@ type LogEntry struct {
 	StatusCode          int    `json:"status_code"`
 	DurationMS          int64  `json:"duration_ms"`
 	TotalTokens         int64  `json:"total_tokens"`
+	MessagesCount       int    `json:"messages_count"`
+	ResponseMessages    int    `json:"response_messages"`
 	RequestBodyPreview  string `json:"request_preview"`
 	ResponseBodyPreview string `json:"response_preview"`
 }

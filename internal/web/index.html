@@ -1,59 +1,33 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ai-menshen Dashboard</title>
+    <title>Overview - ai-menshen</title>
     <link rel="stylesheet" href="/assets/pico.min.css">
+    <link rel="stylesheet" href="/assets/app.css">
     <script defer src="/assets/alpine.min.js"></script>
     <script src="/assets/chart.min.js"></script>
-    <style>
-        :root { --pico-font-size: 0.85rem; }
-        .grid-stats { margin-bottom: 2rem; }
-        .card { padding: 1.2rem; text-align: center; border: 1px solid #eee; border-radius: 8px; background: #fff; }
-        .card h5 { margin-bottom: 0.5rem; color: #666; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-        .card .value { font-size: 1.4rem; font-weight: bold; color: var(--pico-primary); }
-        section h5 { margin-top: 1.5rem; border-left: 4px solid var(--pico-primary); padding-left: 0.5rem; }
-        canvas { max-height: 300px; width: 100% !important; }
-        .header-controls { display: flex; justify-content: flex-end; margin-bottom: 1rem; align-items: center; gap: 0.5rem; }
-        .header-controls select { width: auto; margin: 0; padding: 0.2rem 2.2rem 0.2rem 0.5rem; font-size: 0.8rem; height: auto; }
-        .header-controls label { margin: 0; font-size: 0.8rem; color: #666; }
-        
-        /* Logs Styling */
-        .log-row { cursor: pointer; }
-        .log-row:hover { background-color: #f8f9fa; }
-        .status-ok { color: #198754; font-weight: bold; }
-        .status-error { color: #dc3545; font-weight: bold; }
-        .json-box { background: #f4f4f4; padding: 1rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.75rem; max-height: 400px; white-space: pre-wrap; }
-        .text-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; display: block; }
-        
-        /* Nav Tabs */
-        nav.tabs ul { border-bottom: 1px solid #eee; width: 100%; margin-bottom: 2rem; }
-        nav.tabs li { padding: 0.5rem 1.5rem; cursor: pointer; border-bottom: 2px solid transparent; }
-        nav.tabs li.active { border-bottom: 2px solid var(--pico-primary); font-weight: bold; color: var(--pico-primary); }
-    </style>
 </head>
-<body x-data="dashboard()" @keyup.escape.window="closeDetail()">
-    <nav class="container">
-        <ul><li><strong>门神 ai-menshen</strong></li></ul>
-        <ul>
-            <li><a href="https://github.com/jiacai2050/ai-menshen" target="_blank" class="secondary">GitHub</a></li>
-        </ul>
-    </nav>
-
-    <main class="container">
-        <!-- Tab Navigation -->
-        <nav class="tabs">
+<body x-data="overviewPage()">
+    <header class="container site-header">
+        <nav>
             <ul>
-                <li :class="tab === 'overview' ? 'active' : ''" @click="setTab('overview')">Overview</li>
-                <li :class="tab === 'logs' ? 'active' : ''" @click="setTab('logs')">Audit Logs</li>
+                <li><strong class="nav-brand">门神 ai-menshen</strong></li>
+                <li><a href="/" class="nav-item active">Overview</a></li>
+                <li><a href="/logs" class="nav-item">Audit Logs</a></li>
+            </ul>
+            <ul>
+                <li><a href="https://github.com/jiacai2050/ai-menshen" target="_blank" class="secondary">GitHub</a></li>
             </ul>
         </nav>
+    </header>
 
+    <main class="container">
         <!-- Global Controls -->
         <div class="header-controls">
-            <label>Period:</label>
-            <select x-model="days" @change="refreshData()">
+            <label for="period-select">Period:</label>
+            <select id="period-select" x-model="days" @change="refreshData()">
                 <option value="7">Last 7 Days</option>
                 <option value="14">Last 14 Days</option>
                 <option value="30">Last 30 Days</option>
@@ -61,135 +35,100 @@
             </select>
         </div>
 
-        <!-- Overview Tab -->
-        <div x-show="tab === 'overview'">
-            <div class="grid grid-stats">
-                <div class="card"><h5>Total Requests</h5><div class="value" x-text="summary.total_requests || 0"></div></div>
-                <div class="card"><h5>Cache Hit Rate</h5><div class="value" x-text="hitRate()"></div></div>
-                <div class="card"><h5>Total Tokens</h5><div class="value" x-text="formatNumber(summary.total_tokens)"></div></div>
-                <div class="card"><h5>Cached Tokens</h5><div class="value" x-text="formatNumber(summary.cached_tokens)"></div></div>
+        <!-- Metric Cards -->
+        <div class="grid grid-stats">
+            <div class="card">
+                <h5>Total Requests</h5>
+                <div class="value" x-text="formatNumber(summary.total_requests)"></div>
             </div>
-
-            <section>
-                <h5>Usage Trend</h5>
-                <div style="background: #fff; padding: 1rem; border-radius: 8px; border: 1px solid #eee;">
-                    <canvas id="usageChart"></canvas>
-                </div>
-            </section>
-
-            <section>
-                <h5>Provider Breakdown</h5>
-                <figure>
-                    <table role="grid">
-                        <thead>
-                            <tr><th>Provider</th><th>Requests</th><th>Cache Hits</th><th>Total Tokens</th><th>Cached Tokens</th></tr>
-                        </thead>
-                        <tbody>
-                            <template x-for="p in providers">
-                                <tr>
-                                    <td x-text="p.provider"></td>
-                                    <td x-text="p.request_count"></td>
-                                    <td x-text="p.cache_hits"></td>
-                                    <td x-text="formatNumber(p.total_tokens)"></td>
-                                    <td x-text="formatNumber(p.cached_tokens)"></td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </figure>
-            </section>
-
-            <section>
-                <h5>Model Breakdown</h5>
-                <figure>
-                    <table role="grid">
-                        <thead>
-                            <tr><th>Model</th><th>Requests</th><th>Cache Hits</th><th>Total Tokens</th><th>Cached Tokens</th></tr>
-                        </thead>
-                        <tbody>
-                            <template x-for="m in models">
-                                <tr>
-                                    <td x-text="m.model"></td>
-                                    <td x-text="m.request_count"></td>
-                                    <td x-text="m.cache_hits"></td>
-                                    <td x-text="formatNumber(m.total_tokens)"></td>
-                                    <td x-text="formatNumber(m.cached_tokens)"></td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </figure>
-            </section>
+            <div class="card">
+                <h5>Cache Hit Rate</h5>
+                <div class="value" x-text="hitRate()"></div>
+            </div>
+            <div class="card">
+                <h5>Total Tokens</h5>
+                <div class="value" x-text="formatNumber(summary.total_tokens)"></div>
+            </div>
+            <div class="card">
+                <h5>Cached Tokens</h5>
+                <div class="value" x-text="formatNumber(summary.cached_tokens)"></div>
+            </div>
         </div>
 
-        <!-- Logs Tab -->
-        <div x-show="tab === 'logs'" x-cloak>
+        <!-- Trend Chart -->
+        <section>
+            <h5>Usage Trend</h5>
+            <div class="chart-card">
+                <canvas id="usageChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Provider Breakdown -->
+        <section>
+            <h5>Provider Breakdown</h5>
             <figure>
                 <table role="grid">
                     <thead>
                         <tr>
-                            <th style="width: 15%">Time</th>
-                            <th style="width: 10%">Provider</th>
-                            <th style="width: 12%">Model</th>
-                            <th style="width: 8%">Status</th>
-                            <th style="width: 10%">Latency</th>
-                            <th>Preview (Req/Res)</th>
-                            <th style="width: 10%">Tokens</th>
+                            <th>Provider</th>
+                            <th>Requests</th>
+                            <th>Cache Hits</th>
+                            <th>Total Tokens</th>
+                            <th>Cached Tokens</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <template x-for="log in logs">
-                            <tr class="log-row" @click="showDetail(log.id)">
-                                <td x-text="formatDate(log.created_at)"></td>
-                                <td x-text="log.provider || '-'"></td>
-                                <td x-text="log.model || '-'"></td>
-                                <td :class="log.status_code < 400 ? 'status-ok' : 'status-error'" x-text="log.status_code"></td>
-                                <td x-text="formatDuration(log.duration_ms)"></td>
-                                <td style="max-width: 0; width: 50%;">
-                                    <small class="secondary text-truncate" :title="log.request_preview" x-text="log.request_preview"></small>
-                                    <small class="text-truncate" :title="log.response_preview" x-text="log.response_preview"></small>
-                                </td>
-                                <td x-text="formatNumber(log.total_tokens)"></td>
+                        <template x-if="providers.length === 0">
+                            <tr><td colspan="5" style="text-align: center; color: #888;">No provider usage data yet</td></tr>
+                        </template>
+                        <template x-for="p in providers" :key="p.provider">
+                            <tr>
+                                <td style="font-weight: 500;" x-text="p.provider"></td>
+                                <td x-text="formatNumber(p.request_count)"></td>
+                                <td x-text="formatNumber(p.cache_hits)"></td>
+                                <td x-text="formatNumber(p.total_tokens)"></td>
+                                <td x-text="formatNumber(p.cached_tokens)"></td>
                             </tr>
                         </template>
                     </tbody>
                 </table>
             </figure>
-        </div>
+        </section>
 
-        <!-- Detail Modal -->
-        <dialog id="log-modal" @click.self="closeDetail()">
-            <article style="max-width: 900px; width: 90%;">
-                <header>
-                    <a href="#close" aria-label="Close" class="close" @click.prevent="closeDetail()"></a>
-                    <strong>Request Details: <small x-text="selectedLog?.id"></small></strong>
-                </header>
-                <div class="grid">
-                    <div>
-                        <strong>Time:</strong> <span x-text="formatDate(selectedLog?.created_at)"></span><br>
-                        <strong>Provider:</strong> <span x-text="selectedLog?.provider || '-'"></span><br>
-                        <strong>Model:</strong> <span x-text="selectedLog?.model"></span>
-                    </div>
-                    <div>
-                        <strong>Status:</strong> <span x-text="selectedLog?.status_code"></span><br>
-                        <strong>Latency:</strong> <span x-text="formatDuration(selectedLog?.duration_ms)"></span>
-                    </div>
-                </div>
-                
-                <h5>Request Body</h5>
-                <pre class="json-box" x-text="formatJSON(selectedLog?.request_body)"></pre>
-                
-                <h5>Response Body</h5>
-                <pre class="json-box" x-text="formatJSON(selectedLog?.response_body)"></pre>
-                
-                <footer>
-                    <button class="secondary" @click="closeDetail()">Close</button>
-                </footer>
-            </article>
-        </dialog>
+        <!-- Model Breakdown -->
+        <section>
+            <h5>Model Breakdown</h5>
+            <figure>
+                <table role="grid">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Requests</th>
+                            <th>Cache Hits</th>
+                            <th>Total Tokens</th>
+                            <th>Cached Tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-if="models.length === 0">
+                            <tr><td colspan="5" style="text-align: center; color: #888;">No model usage data yet</td></tr>
+                        </template>
+                        <template x-for="m in models" :key="m.model">
+                            <tr>
+                                <td style="font-weight: 500;" x-text="m.model"></td>
+                                <td x-text="formatNumber(m.request_count)"></td>
+                                <td x-text="formatNumber(m.cache_hits)"></td>
+                                <td x-text="formatNumber(m.total_tokens)"></td>
+                                <td x-text="formatNumber(m.cached_tokens)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </figure>
+        </section>
     </main>
 
-    <footer class="container" style="margin-top: 4rem; padding: 2rem 0; border-top: 1px solid #eee;">
+    <footer class="container" style="margin-top: 4rem; padding: 2rem 0; border-top: 1px solid var(--pico-muted-border-color);">
         <div class="grid">
             <div>
                 <small><strong>ai-menshen</strong></small><br>
@@ -197,7 +136,7 @@
             </div>
             <div style="text-align: right;">
                 <small class="secondary">
-                    &copy; 2026. Built with Go & ❤️. 
+                    Built with Go & Modern SQLite. 
                     <a href="https://github.com/jiacai2050/ai-menshen" target="_blank" style="margin-left: 0.5rem;">GitHub</a>
                 </small><br>
                 <small style="color: #198754;">● Connected & Secure</small>
@@ -206,68 +145,52 @@
     </footer>
 
     <script>
-        function dashboard() {
+        function overviewPage() {
             return {
-                tab: 'overview',
+                days: 14,
                 summary: {},
                 models: [],
                 providers: [],
                 daily: [],
-                logs: [],
-                selectedLog: null,
-                days: 14,
                 chart: null,
                 init() {
-                    const hash = window.location.hash.slice(1);
-                    if (['overview', 'logs'].includes(hash)) {
-                        this.tab = hash;
+                    const urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.has('days')) {
+                        const d = parseInt(urlParams.get('days'), 10);
+                        if ([7, 14, 30, 90].includes(d)) this.days = d;
                     }
-                    window.addEventListener('hashchange', () => {
-                        const newHash = window.location.hash.slice(1);
-                        if (['overview', 'logs'].includes(newHash)) {
-                            this.tab = newHash;
-                            this.refreshData();
-                        }
-                    });
-                    this.refreshData();
-                },
-                setTab(t) {
-                    this.tab = t;
-                    window.location.hash = t;
+                    if (window.matchMedia) {
+                        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+                            this.renderChart();
+                        });
+                    }
                     this.refreshData();
                 },
                 refreshData() {
-                    if (this.tab === 'overview') this.fetchOverview();
-                    if (this.tab === 'logs') this.fetchLogs();
-                },
-                fetchOverview() {
                     const params = '?days=' + this.days;
-                    fetch('/__report/summary' + params).then(res => res.json()).then(data => this.summary = data);
-                    fetch('/__report/models' + params).then(res => res.json()).then(data => this.models = data);
-                    fetch('/__report/providers' + params).then(res => res.json()).then(data => this.providers = data);
+                    fetch('/__report/summary' + params).then(res => res.json()).then(data => this.summary = data || {});
+                    fetch('/__report/models' + params).then(res => res.json()).then(data => this.models = data || []);
+                    fetch('/__report/providers' + params).then(res => res.json()).then(data => this.providers = data || []);
                     fetch('/__report/daily' + params).then(res => res.json()).then(data => {
-                        this.daily = data;
+                        this.daily = data || [];
                         this.renderChart();
                     });
                 },
-                fetchLogs() {
-                    fetch('/__report/logs?days=' + this.days).then(res => res.json()).then(data => this.logs = data);
-                },
-                showDetail(id) {
-                    fetch('/__report/log?id=' + id).then(res => res.json()).then(data => {
-                        this.selectedLog = data;
-                        document.getElementById('log-modal').showModal();
-                    });
-                },
-                closeDetail() {
-                    this.selectedLog = null;
-                    const modal = document.getElementById('log-modal');
-                    if (modal.open) modal.close();
-                },
                 renderChart() {
                     if (!this.daily || this.daily.length === 0) return;
-                    const ctx = document.getElementById('usageChart').getContext('2d');
+                    const canvas = document.getElementById('usageChart');
+                    if (!canvas) return;
+                    const ctx = canvas.getContext('2d');
                     if (this.chart) this.chart.destroy();
+
+                    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    const textColor = isDark ? '#94a3b8' : '#64748b';
+                    const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+                    const promptBg = isDark ? 'rgba(56, 189, 248, 0.35)' : '#cce5ff';
+                    const promptBorder = isDark ? '#38bdf8' : '#0066cc';
+                    const compBg = isDark ? 'rgba(52, 211, 153, 0.35)' : '#d1e7dd';
+                    const compBorder = isDark ? '#34d399' : '#198754';
+
                     this.chart = new Chart(ctx, {
                         type: 'bar',
                         data: {
@@ -275,14 +198,14 @@
                             datasets: [{
                                 label: 'Prompt Tokens',
                                 data: this.daily.map(d => d.prompt_tokens),
-                                backgroundColor: '#cce5ff',
-                                borderColor: '#0066cc',
+                                backgroundColor: promptBg,
+                                borderColor: promptBorder,
                                 borderWidth: 1
                             }, {
                                 label: 'Completion Tokens',
                                 data: this.daily.map(d => d.completion_tokens),
-                                backgroundColor: '#d1e7dd',
-                                borderColor: '#198754',
+                                backgroundColor: compBg,
+                                borderColor: compBorder,
                                 borderWidth: 1
                             }]
                         },
@@ -290,11 +213,23 @@
                             responsive: true,
                             maintainAspectRatio: false,
                             scales: {
-                                x: { stacked: true, grid: { display: false } },
-                                y: { stacked: true, beginAtZero: true }
+                                x: {
+                                    stacked: true,
+                                    grid: { display: false },
+                                    ticks: { color: textColor }
+                                },
+                                y: {
+                                    stacked: true,
+                                    beginAtZero: true,
+                                    grid: { color: gridColor },
+                                    ticks: { color: textColor }
+                                }
                             },
                             plugins: {
-                                legend: { position: 'bottom' }
+                                legend: {
+                                    position: 'bottom',
+                                    labels: { color: textColor }
+                                }
                             }
                         }
                     });
@@ -304,27 +239,8 @@
                     return ((this.summary.cache_hits / this.summary.total_requests) * 100).toFixed(1) + '%';
                 },
                 formatNumber(n) {
-                    if (!n) return '0';
+                    if (n === null || n === undefined) return '0';
                     return n.toLocaleString();
-                },
-                formatDuration(ms) {
-                    if (ms === null || ms === undefined) return '-';
-                    if (ms < 1000) return ms + 'ms';
-                    return (ms / 1000).toFixed(2) + 's';
-                },
-                formatDate(s) {
-                    if (!s) return '-';
-                    const d = new Date(s);
-                    const pad = n => String(n).padStart(2, '0');
-                    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-                },
-                formatJSON(s) {
-                    if (!s) return '-';
-                    try {
-                        return JSON.stringify(JSON.parse(s), null, 2);
-                    } catch(e) {
-                        return s;
-                    }
                 }
             }
         }

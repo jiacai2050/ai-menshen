@@ -590,3 +590,140 @@ func (c *cancelingResponseWriter) Flush() {
 		flusher.Flush()
 	}
 }
+
+func TestServeWebPages(t *testing.T) {
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"primary": {Name: "primary", BaseURL: "https://primary.example", Weight: 10},
+		},
+	}
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	tests := []struct {
+		path         string
+		expectedCode int
+		contains     string
+	}{
+		{"/", http.StatusOK, "Overview"},
+		{"/overview", http.StatusOK, "Overview"},
+		{"/logs", http.StatusOK, "Audit Logs"},
+		{"/logs/req-123456", http.StatusOK, "Audit Logs"},
+		{"/assets/pico.min.css", http.StatusOK, "Pico CSS"},
+		{"/assets/app.css", http.StatusOK, "--nav-active-bg"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			gateway.ServeWebHTTP(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("%s status code = %d, want %d", tt.path, rec.Code, tt.expectedCode)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, tt.contains) {
+				t.Errorf("%s body does not contain %q", tt.path, tt.contains)
+			}
+		})
+	}
+}
+
+func TestRequestLogsMessagesCount(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_msg_counts.db")
+	storage, err := OpenStorage(StorageConfig{
+		SQLite: SQLiteConfig{Path: dbPath},
+	})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	// 1. Chat completion with 4 messages
+	reqBody1 := []byte(`{"messages":[{"role":"system","content":"s"},{"role":"user","content":"u1"},{"role":"assistant","content":"a1"},{"role":"user","content":"u2"}]}`)
+	respBody1 := []byte(`{"choices":[{"message":{"role":"assistant","content":"hello"}}]}`)
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-multi", CreatedAt: time.Now(), Model: "gpt-4o", Path: "/chat/completions", RequestBody: reqBody1},
+		ResponseLog{RequestID: "req-multi", StatusCode: 200, ResponseBody: respBody1},
+		nil,
+	)
+
+	// 2. Error response
+	reqBody2 := []byte(`{"messages":[{"role":"user","content":"error test"}]}`)
+	respBody2 := []byte(`{"error":{"message":"bad request"}}`)
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-err", CreatedAt: time.Now(), Model: "gpt-4o", Path: "/chat/completions", RequestBody: reqBody2},
+		ResponseLog{RequestID: "req-err", StatusCode: 400, ResponseBody: respBody2},
+		nil,
+	)
+
+	// 3. Streaming response (SSE)
+	reqBody3 := []byte(`{"messages":[{"role":"user","content":"stream test"}]}`)
+	respBody3 := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-stream", CreatedAt: time.Now(), Model: "gpt-4o", Path: "/chat/completions", RequestBody: reqBody3},
+		ResponseLog{RequestID: "req-stream", StatusCode: 200, ResponseBody: respBody3},
+		nil,
+	)
+
+	logs, err := storage.RequestLogs(1, 10)
+	if err != nil {
+		t.Fatalf("RequestLogs() error = %v", err)
+	}
+
+	byID := make(map[string]LogEntry)
+	for _, l := range logs {
+		byID[l.ID] = l
+	}
+
+	// Verify multi-turn request
+	l1, ok := byID["req-multi"]
+	if !ok {
+		t.Fatal("req-multi not found")
+	}
+	if l1.MessagesCount != 4 {
+		t.Errorf("req-multi MessagesCount = %d, want 4", l1.MessagesCount)
+	}
+	if l1.ResponseMessages != 1 {
+		t.Errorf("req-multi ResponseMessages = %d, want 1", l1.ResponseMessages)
+	}
+	if l1.RequestBodyPreview != "s" {
+		t.Errorf("req-multi RequestBodyPreview = %q, want %q", l1.RequestBodyPreview, "s")
+	}
+	if l1.ResponseBodyPreview != "hello" {
+		t.Errorf("req-multi ResponseBodyPreview = %q, want %q", l1.ResponseBodyPreview, "hello")
+	}
+
+	// Verify error response
+	l2, ok := byID["req-err"]
+	if !ok {
+		t.Fatal("req-err not found")
+	}
+	if l2.MessagesCount != 1 {
+		t.Errorf("req-err MessagesCount = %d, want 1", l2.MessagesCount)
+	}
+	if l2.ResponseMessages != 0 {
+		t.Errorf("req-err ResponseMessages = %d, want 0", l2.ResponseMessages)
+	}
+	if l2.RequestBodyPreview != "error test" {
+		t.Errorf("req-err RequestBodyPreview = %q, want %q", l2.RequestBodyPreview, "error test")
+	}
+	if l2.ResponseBodyPreview != "bad request" {
+		t.Errorf("req-err ResponseBodyPreview = %q, want %q", l2.ResponseBodyPreview, "bad request")
+	}
+
+	// Verify streaming response
+	l3, ok := byID["req-stream"]
+	if !ok {
+		t.Fatal("req-stream not found")
+	}
+	if l3.MessagesCount != 1 {
+		t.Errorf("req-stream MessagesCount = %d, want 1", l3.MessagesCount)
+	}
+	if l3.ResponseMessages != 1 {
+		t.Errorf("req-stream ResponseMessages = %d, want 1", l3.ResponseMessages)
+	}
+}

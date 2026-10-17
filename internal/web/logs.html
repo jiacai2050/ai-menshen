@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Logs - ai-menshen</title>
+    <link rel="stylesheet" href="/assets/pico.min.css">
+    <link rel="stylesheet" href="/assets/app.css">
+    <script defer src="/assets/alpine.min.js"></script>
+</head>
+<body x-data="logsPage()" @keyup.escape.window="closeDetail()">
+    <header class="container site-header">
+        <nav>
+            <ul>
+                <li><strong class="nav-brand">门神 ai-menshen</strong></li>
+                <li><a href="/" class="nav-item">Overview</a></li>
+                <li><a href="/logs" class="nav-item active">Audit Logs</a></li>
+            </ul>
+            <ul>
+                <li><a href="https://github.com/jiacai2050/ai-menshen" target="_blank" class="secondary">GitHub</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+            <!-- Period Selector -->
+            <div>
+                <select x-model="days" @change="fetchLogs()">
+                    <option value="7">Last 7 Days</option>
+                    <option value="14">Last 14 Days</option>
+                    <option value="30">Last 30 Days</option>
+                    <option value="90">Last 90 Days</option>
+                </select>
+            </div>
+
+            <!-- Search Box -->
+            <div>
+                <input type="search" placeholder="Filter by Request ID, Model, Provider, Path, or Preview..." x-model="searchQuery">
+            </div>
+
+            <!-- Status Filter -->
+            <div>
+                <select x-model="statusFilter">
+                    <option value="all">All Statuses</option>
+                    <option value="2xx">2xx Success</option>
+                    <option value="499">499 Client Canceled</option>
+                    <option value="4xx">4xx Errors</option>
+                    <option value="5xx">5xx Errors</option>
+                </select>
+            </div>
+
+            <!-- Refresh Button -->
+            <div>
+                <button class="secondary" @click="fetchLogs()" :disabled="loading" style="display: flex; align-items: center; gap: 0.3rem;">
+                    <span x-show="!loading">🔄 Refresh</span>
+                    <span x-show="loading">Loading...</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Summary Row -->
+        <div class="stats-summary">
+            <div>
+                Showing <strong x-text="filteredLogs().length"></strong> of <strong x-text="logs.length"></strong> records
+                <span x-show="searchQuery || statusFilter !== 'all'" class="secondary">(filtered)</span>
+            </div>
+            <div class="secondary" style="font-size: 0.75rem;">
+                Tip: Click any row or link to open fixed permalink
+            </div>
+        </div>
+
+        <!-- Logs Table -->
+        <figure class="log-table">
+            <table role="grid">
+                <thead>
+                    <tr>
+                        <th style="width: 13%">Time</th>
+                        <th style="width: 10%">Provider</th>
+                        <th style="width: 13%">Model</th>
+                        <th style="width: 8%">Status</th>
+                        <th style="width: 8%">Latency</th>
+                        <th style="width: 9%">Tokens</th>
+                        <th>Prompt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-if="filteredLogs().length === 0 && !loading">
+                        <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">No matching audit logs found</td></tr>
+                    </template>
+                    <template x-for="log in filteredLogs()" :key="log.id">
+                        <tr class="log-row" @click="showDetail(log.id)">
+                            <td style="font-size: 0.75rem; white-space: nowrap;">
+                                <a :href="getPermalink(log.id)" @click.prevent="showDetail(log.id)" class="log-permalink" x-text="formatDate(log.created_at)"></a>
+                            </td>
+                            <td>
+                                <span class="badge badge-provider" x-text="log.provider || 'default'"></span>
+                            </td>
+                            <td>
+                                <span style="font-weight: 500;" x-text="log.model || '-'"></span>
+                            </td>
+                            <td>
+                                <span :class="statusBadgeClass(log.status_code)" x-text="formatStatus(log.status_code)"></span>
+                            </td>
+                            <td style="white-space: nowrap; font-size: 0.78rem;" x-text="formatDuration(log.duration_ms)"></td>
+                            <td style="font-weight: 500;" x-text="formatNumber(log.total_tokens)"></td>
+                            <td>
+                                <div class="msg-col-cell">
+                                    <span class="badge badge-msg-req" :title="getReqMsgCount(log) + ' message(s)'" x-text="getReqMsgCount(log)"></span>
+                                    <span class="msg-preview-text" :title="log.request_preview" x-text="formatPreview(log.request_preview)"></span>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </figure>
+
+        <!-- Log Detail Modal (Unfolds Message Content, Supports Full Download and Permalink) -->
+        <dialog id="log-modal" @click.self="closeDetail()">
+            <article>
+                <header style="margin-bottom: 0.6rem;">
+                    <a href="#close" aria-label="Close" class="close" @click.prevent="closeDetail()"></a>
+                    <div style="display: flex; align-items: center; gap: 0.6rem;">
+                        <strong style="font-size: 1rem;">Exchange Detail</strong>
+                        <span class="badge badge-provider" x-text="selectedLog?.provider || 'default'"></span>
+                        <span :class="statusBadgeClass(selectedLog?.status_code)" x-text="formatStatus(selectedLog?.status_code)"></span>
+                    </div>
+                </header>
+
+                <!-- Metadata Grid -->
+                <div class="modal-meta-grid">
+                    <div>
+                        <div class="meta-label">Request ID & Permalink</div>
+                        <div class="meta-val" style="font-family: monospace; font-size: 0.75rem; display: flex; align-items: center; flex-wrap: wrap; gap: 4px;">
+                            <span x-text="selectedLog?.id"></span>
+                            <button class="viewer-btn" style="padding: 1px 5px; font-size: 0.65rem;" @click="copyText(selectedLog?.id, 'id')">
+                                <span x-text="copiedTarget === 'id' ? '✓ Copied ID' : 'Copy ID'"></span>
+                            </button>
+                            <button class="viewer-btn" style="padding: 1px 5px; font-size: 0.65rem;" @click="copyPermalink()">
+                                <span x-text="copiedTarget === 'link' ? '✓ Copied Link' : '🔗 Copy Link'"></span>
+                            </button>
+                            <a :href="selectedLog ? getPermalink(selectedLog.id) : '#'" target="_blank" class="viewer-btn" style="padding: 1px 5px; font-size: 0.65rem;">
+                                ↗ Open Tab
+                            </a>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="meta-label">Time</div>
+                        <div class="meta-val" x-text="formatDate(selectedLog?.created_at)"></div>
+                    </div>
+                    <div>
+                        <div class="meta-label">Model / Path</div>
+                        <div class="meta-val"><span x-text="selectedLog?.model || '-'"></span> <small class="secondary" x-text="selectedLog?.path"></small></div>
+                    </div>
+                    <div>
+                        <div class="meta-label">Latency / Tokens</div>
+                        <div class="meta-val"><span x-text="formatDuration(selectedLog?.duration_ms)"></span> &bull; <span x-text="formatNumber(selectedLog?.total_tokens) + ' tokens'"></span></div>
+                    </div>
+                </div>
+
+                <!-- Tab & Action Switcher Bar -->
+                <div class="tab-action-bar">
+                    <!-- Body Tab Switcher -->
+                    <div class="body-tabs">
+                        <button class="body-tab-btn" :class="activeBodyTab === 'request' ? 'active' : ''" @click="activeBodyTab = 'request'">
+                            Request Messages
+                            <span class="badge badge-size" x-text="formatBytes(selectedLog?.request_body?.length || 0)"></span>
+                        </button>
+                        <button class="body-tab-btn" :class="activeBodyTab === 'response' ? 'active' : ''" @click="activeBodyTab = 'response'">
+                            Response Message
+                            <span class="badge badge-size" x-text="formatBytes(selectedLog?.response_body?.length || 0)"></span>
+                        </button>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="tab-right-actions">
+                        <!-- View Mode Toggle: Messages vs Raw JSON -->
+                        <button class="viewer-btn" :class="viewMode === 'messages' ? 'active' : ''" @click="viewMode = 'messages'">
+                            💬 Messages
+                        </button>
+                        <button class="viewer-btn" :class="viewMode === 'raw' ? 'active' : ''" @click="viewMode = 'raw'">
+                            { } Raw JSON
+                        </button>
+
+                        <!-- Copy Button -->
+                        <button class="viewer-btn" @click="copyCurrentContent()">
+                            <span x-text="copiedTarget === 'content' ? '✓ Copied!' : '📋 Copy Content'"></span>
+                        </button>
+
+                        <!-- Download JSON File Button -->
+                        <button class="viewer-btn" @click="downloadCurrentBody()">
+                            💾 Download JSON
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Scrollable Body Content -->
+                <div class="modal-body-scroll">
+                    <!-- Large Body Alert -->
+                    <div x-show="currentBodyIsLarge() && !forceFullRender" class="large-alert">
+                        <div>
+                            ⚠️ <strong>Large Payload (<span x-text="formatBytes(currentBodyLength())"></span>)</strong>: Safe preview limit active to maintain smoothness.
+                        </div>
+                        <div style="display: flex; gap: 0.4rem;">
+                            <button class="viewer-btn" @click="forceFullRender = true">⚡ Render Full Text</button>
+                        </div>
+                    </div>
+
+                    <!-- MODE 1: Unfolded Messages View (Default) -->
+                    <template x-if="viewMode === 'messages'">
+                        <div>
+                            <!-- TAB A: REQUEST MESSAGES -->
+                            <div x-show="activeBodyTab === 'request'">
+                                <!-- Request Parameters Pill Bar -->
+                                <template x-if="parsedRequest.paramsList.length > 0">
+                                    <div class="params-bar">
+                                        <strong style="color: var(--text-secondary); margin-right: 2px;">Params:</strong>
+                                        <template x-for="p in parsedRequest.paramsList" :key="p.key">
+                                            <span class="param-tag">
+                                                <span style="color: var(--text-muted);" x-text="p.key + ':'"></span>
+                                                <strong x-text="p.value"></strong>
+                                            </span>
+                                        </template>
+                                    </div>
+                                </template>
+
+                                <!-- Unfolded Message Cards -->
+                                <template x-if="parsedRequest.messages && parsedRequest.messages.length > 0">
+                                    <div>
+                                        <div class="msg-list-toolbar" x-show="parsedRequest.messages.length > 1">
+                                            <span class="secondary" style="font-size: 0.74rem;" x-text="parsedRequest.messages.length + ' messages in thread'"></span>
+                                            <div style="display: flex; gap: 0.35rem;">
+                                                <button type="button" class="viewer-btn" style="padding: 1px 8px; font-size: 0.7rem;" @click="setAllMessagesCollapsed(false)">▼ Expand All</button>
+                                                <button type="button" class="viewer-btn" style="padding: 1px 8px; font-size: 0.7rem;" @click="setAllMessagesCollapsed(true)">▲ Collapse All</button>
+                                            </div>
+                                        </div>
+                                        <div class="msg-list">
+                                            <template x-for="(msg, idx) in parsedRequest.messages" :key="idx">
+                                                <div class="msg-card" :class="msg._collapsed ? 'collapsed' : ''">
+                                                    <div class="msg-header" @click="msg._collapsed = !msg._collapsed" title="Click to collapse / expand">
+                                                        <div class="msg-header-left">
+                                                            <span :class="'msg-role-badge msg-role-' + (msg.role || 'user')" x-text="msg.role"></span>
+                                                            <template x-if="msg.content && msg.content.length > 0">
+                                                                <span class="secondary" style="font-size: 0.72rem;" x-text="formatNumber(msg.content.length) + ' chars'"></span>
+                                                            </template>
+                                                            <template x-if="msg.tool_calls && msg.tool_calls.length > 0">
+                                                                <span class="badge badge-tool-call" x-text="msg.tool_calls.length + ' tool call' + (msg.tool_calls.length > 1 ? 's' : '')"></span>
+                                                            </template>
+                                                            <template x-if="!msg.content && (!msg.tool_calls || msg.tool_calls.length === 0)">
+                                                                <span class="secondary" style="font-size: 0.72rem;">0 chars</span>
+                                                            </template>
+                                                        </div>
+                                                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                                            <button class="viewer-btn" style="padding: 1px 6px; font-size: 0.68rem;" @click.stop="copyText(msg.content, 'msg-' + idx)">
+                                                                <span x-text="copiedTarget === ('msg-' + idx) ? '✓ Copied' : 'Copy'"></span>
+                                                            </button>
+                                                            <span class="msg-toggle-icon" x-text="msg._collapsed ? '▼' : '▲'"></span>
+                                                        </div>
+                                                    </div>
+                                                    <div x-show="!msg._collapsed">
+                                                        <div class="msg-content" x-text="msg.content"></div>
+                                                        <!-- If tool calls present -->
+                                                        <template x-if="msg.tool_calls">
+                                                            <div class="tool-call-box">
+                                                                <strong>Tool Calls:</strong>
+                                                                <pre style="margin: 4px 0 0 0; background: none; padding: 0; font-size: 0.72rem;" x-text="JSON.stringify(msg.tool_calls, null, 2)"></pre>
+                                                            </div>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- Legacy Prompt format or Non-Chat -->
+                                <template x-if="!parsedRequest.messages || parsedRequest.messages.length === 0">
+                                    <div>
+                                        <div class="msg-card" :class="parsedRequest._promptCollapsed ? 'collapsed' : ''">
+                                            <div class="msg-header" @click="parsedRequest._promptCollapsed = !parsedRequest._promptCollapsed" title="Click to collapse / expand">
+                                                <div class="msg-header-left">
+                                                    <span class="msg-role-badge msg-role-user">PROMPT</span>
+                                                    <span class="secondary" style="font-size: 0.72rem;" x-text="formatNumber((parsedRequest.prompt || parsedRequest.rawText || '').length) + ' chars'"></span>
+                                                </div>
+                                                <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                                    <button class="viewer-btn" style="padding: 1px 6px; font-size: 0.68rem;" @click.stop="copyText(parsedRequest.prompt || parsedRequest.rawText, 'req-prompt')">
+                                                        <span x-text="copiedTarget === 'req-prompt' ? '✓ Copied' : 'Copy'"></span>
+                                                    </button>
+                                                    <span class="msg-toggle-icon" x-text="parsedRequest._promptCollapsed ? '▼' : '▲'"></span>
+                                                </div>
+                                            </div>
+                                            <div x-show="!parsedRequest._promptCollapsed">
+                                                <div class="msg-content" x-text="parsedRequest.prompt || parsedRequest.rawText || '(Empty Request Body)'"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <!-- TAB B: RESPONSE MESSAGE -->
+                            <div x-show="activeBodyTab === 'response'">
+                                <!-- Error Alert if status >= 400 or error body -->
+                                <template x-if="parsedResponse.error">
+                                    <div class="error-card">
+                                        <strong>⚠️ Response Error:</strong>
+                                        <div style="margin-top: 4px; font-family: monospace;" x-text="parsedResponse.error"></div>
+                                    </div>
+                                </template>
+
+                                <!-- Reasoning / Thinking Process (DeepSeek-R1, OpenAI o1/o3) -->
+                                <template x-if="parsedResponse.reasoning">
+                                    <div class="reasoning-card">
+                                        <div class="reasoning-header" @click="showReasoning = !showReasoning">
+                                            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                                <span>🧠</span>
+                                                <span>Thinking Process / Reasoning (<span x-text="formatNumber(parsedResponse.reasoning.length)"></span> chars)</span>
+                                            </div>
+                                            <span style="font-size: 0.7rem;" x-text="showReasoning ? '▲ Collapse' : '▼ Expand'"></span>
+                                        </div>
+                                        <div class="reasoning-content" x-show="showReasoning" x-text="parsedResponse.reasoning"></div>
+                                    </div>
+                                </template>
+
+                                <!-- Assistant Response Message Card -->
+                                <div class="msg-card" :class="parsedResponse._collapsed ? 'collapsed' : ''">
+                                    <div class="msg-header" @click="parsedResponse._collapsed = !parsedResponse._collapsed" title="Click to collapse / expand">
+                                        <div class="msg-header-left">
+                                            <span class="msg-role-badge msg-role-assistant" x-text="parsedResponse.role || 'ASSISTANT'"></span>
+                                            <template x-if="parsedResponse.isStream">
+                                                <span class="badge badge-stream">⚡ SSE Reconstructed</span>
+                                            </template>
+                                            <template x-if="parsedResponse.finishReason">
+                                                <span class="secondary" style="font-size: 0.72rem;" x-text="'finish: ' + parsedResponse.finishReason"></span>
+                                            </template>
+                                            <template x-if="parsedResponse.content && parsedResponse.content.length > 0">
+                                                <span class="secondary" style="font-size: 0.72rem;" x-text="formatNumber(parsedResponse.content.length) + ' chars'"></span>
+                                            </template>
+                                            <template x-if="parsedResponse.tool_calls && parsedResponse.tool_calls.length > 0">
+                                                <span class="badge badge-tool-call" x-text="parsedResponse.tool_calls.length + ' tool call' + (parsedResponse.tool_calls.length > 1 ? 's' : '')"></span>
+                                            </template>
+                                            <template x-if="!parsedResponse.content && (!parsedResponse.tool_calls || parsedResponse.tool_calls.length === 0)">
+                                                <span class="secondary" style="font-size: 0.72rem;">0 chars</span>
+                                            </template>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                            <button class="viewer-btn" style="padding: 1px 6px; font-size: 0.68rem;" @click.stop="copyText(parsedResponse.content || JSON.stringify(parsedResponse.tool_calls, null, 2), 'resp-msg')">
+                                                <span x-text="copiedTarget === 'resp-msg' ? '✓ Copied' : 'Copy'"></span>
+                                            </button>
+                                            <span class="msg-toggle-icon" x-text="parsedResponse._collapsed ? '▼' : '▲'"></span>
+                                        </div>
+                                    </div>
+
+                                    <div x-show="!parsedResponse._collapsed">
+                                        <template x-if="parsedResponse.content">
+                                            <div class="msg-content" x-text="parsedResponse.content"></div>
+                                        </template>
+                                        <template x-if="!parsedResponse.content && (!parsedResponse.tool_calls || parsedResponse.tool_calls.length === 0)">
+                                            <div class="msg-content" style="color: var(--text-muted); font-style: italic;" x-text="parsedResponse.error ? '' : '(Empty Response Body)'"></div>
+                                        </template>
+
+                                        <!-- If tool calls in response -->
+                                        <template x-if="parsedResponse.tool_calls && parsedResponse.tool_calls.length > 0">
+                                            <div class="tool-call-box">
+                                                <strong>Tool Calls:</strong>
+                                                <pre style="margin: 4px 0 0 0; background: none; padding: 0; font-size: 0.72rem;" x-text="JSON.stringify(parsedResponse.tool_calls, null, 2)"></pre>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- MODE 2: Raw JSON View (Secondary/Fallback) -->
+                    <template x-if="viewMode === 'raw'">
+                        <div>
+                            <div style="display: flex; justify-content: flex-end; margin-bottom: 0.4rem;">
+                                <button class="viewer-btn" @click="wrapLines = !wrapLines" x-text="wrapLines ? 'Unwrap Lines' : 'Wrap Lines'"></button>
+                            </div>
+                            <pre class="json-box" :class="wrapLines ? 'wrap' : 'nowrap'" x-text="renderCurrentRawBody()"></pre>
+                        </div>
+                    </template>
+                </div>
+
+                <footer style="margin-top: 0.6rem; display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--surface-border);">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">
+                        <span>Raw Payload Size: <strong x-text="formatBytes(currentBodyLength())"></strong></span>
+                    </div>
+                    <button class="secondary" @click="closeDetail()" style="margin: 0; padding: 0.35rem 1.2rem;">Close (Esc)</button>
+                </footer>
+            </article>
+        </dialog>
+    </main>
+
+    <footer class="container" style="margin-top: 4rem; padding: 2rem 0; border-top: 1px solid var(--pico-muted-border-color);">
+        <div class="grid">
+            <div>
+                <small><strong>ai-menshen</strong></small><br>
+                <small class="secondary">The local-first AI door guardian.</small>
+            </div>
+            <div style="text-align: right;">
+                <small class="secondary">
+                    Built with Go & Modern SQLite. 
+                    <a href="https://github.com/jiacai2050/ai-menshen" target="_blank" style="margin-left: 0.5rem;">GitHub</a>
+                </small><br>
+                <small style="color: #198754;">● Connected & Secure</small>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        const SAFE_PREVIEW_LIMIT = 256 * 1024; // 256 KB safe threshold
+
+        function logsPage() {
+            return {
+                days: 14,
+                logs: [],
+                loading: false,
+                searchQuery: '',
+                statusFilter: 'all',
+                selectedLog: null,
+                activeBodyTab: 'request',
+                viewMode: 'messages', // 'messages' (default unfolded) or 'raw'
+                wrapLines: true,
+                forceFullRender: false,
+                showReasoning: true,
+                copiedTarget: null,
+
+                // Parsed representations
+                parsedRequest: { messages: [], paramsList: [], prompt: null, rawText: '' },
+                parsedResponse: { content: '', reasoning: '', isStream: false, role: 'assistant', finishReason: '', error: null, tool_calls: null },
+
+                init() {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    if (urlParams.has('days')) {
+                        const d = parseInt(urlParams.get('days'), 10);
+                        if ([7, 14, 30, 90].includes(d)) this.days = d;
+                    }
+
+                    // Check for permalink ID in URL (either ?id=... or /logs/...)
+                    let initialId = urlParams.get('id');
+                    if (!initialId && window.location.pathname.startsWith('/logs/')) {
+                        const parts = window.location.pathname.split('/');
+                        if (parts.length >= 3 && parts[2]) {
+                            initialId = decodeURIComponent(parts[2]);
+                        }
+                    }
+
+                    this.fetchLogs();
+
+                    if (initialId) {
+                        this.showDetail(initialId, false);
+                    }
+
+                    // Handle Browser Back / Forward buttons
+                    window.addEventListener('popstate', (e) => {
+                        const params = new URLSearchParams(window.location.search);
+                        let id = params.get('id');
+                        if (!id && window.location.pathname.startsWith('/logs/')) {
+                            const parts = window.location.pathname.split('/');
+                            if (parts.length >= 3 && parts[2]) {
+                                id = decodeURIComponent(parts[2]);
+                            }
+                        }
+                        if (id) {
+                            this.showDetail(id, false);
+                        } else {
+                            this.closeDetail(false);
+                        }
+                    });
+                },
+
+                // Generate fixed permalink URL
+                getPermalink(id) {
+                    if (!id) return '/logs';
+                    return '/logs?id=' + encodeURIComponent(id);
+                },
+
+                copyPermalink() {
+                    if (!this.selectedLog) return;
+                    const url = window.location.origin + this.getPermalink(this.selectedLog.id);
+                    this.copyText(url, 'link');
+                },
+
+                fetchLogs() {
+                    this.loading = true;
+                    fetch('/__report/logs?days=' + this.days)
+                        .then(res => res.json())
+                        .then(data => {
+                            this.logs = data || [];
+                        })
+                        .catch(err => {
+                            console.error('Fetch logs error:', err);
+                        })
+                        .finally(() => {
+                            this.loading = false;
+                        });
+                },
+
+                filteredLogs() {
+                    let list = this.logs;
+                    
+                    // Filter by Status
+                    if (this.statusFilter === '2xx') {
+                        list = list.filter(l => l.status_code >= 200 && l.status_code < 300);
+                    } else if (this.statusFilter === '499') {
+                        list = list.filter(l => l.status_code === 499);
+                    } else if (this.statusFilter === '4xx') {
+                        list = list.filter(l => l.status_code >= 400 && l.status_code < 500 && l.status_code !== 499);
+                    } else if (this.statusFilter === '5xx') {
+                        list = list.filter(l => l.status_code >= 500);
+                    }
+
+                    // Filter by Search Query
+                    if (this.searchQuery && this.searchQuery.trim() !== '') {
+                        const q = this.searchQuery.toLowerCase().trim();
+                        list = list.filter(l => {
+                            return (l.id && l.id.toLowerCase().includes(q)) ||
+                                   (l.model && l.model.toLowerCase().includes(q)) ||
+                                   (l.provider && l.provider.toLowerCase().includes(q)) ||
+                                   (l.path && l.path.toLowerCase().includes(q)) ||
+                                   (l.request_preview && l.request_preview.toLowerCase().includes(q)) ||
+                                   (l.response_preview && l.response_preview.toLowerCase().includes(q));
+                        });
+                    }
+
+                    return list;
+                },
+
+                showDetail(id, pushState = true) {
+                    this.forceFullRender = false;
+                    this.copiedTarget = null;
+                    this.viewMode = 'messages';
+                    this.showReasoning = true;
+
+                    // Update URL permalink
+                    if (pushState) {
+                        const newUrl = this.getPermalink(id) + (this.days !== 14 ? '&days=' + this.days : '');
+                        history.pushState({ logId: id }, '', newUrl);
+                    }
+
+                    fetch('/__report/log?id=' + encodeURIComponent(id))
+                        .then(res => {
+                            if (!res.ok) throw new Error('HTTP ' + res.status);
+                            return res.json();
+                        })
+                        .then(data => {
+                            this.selectedLog = data;
+                            this.activeBodyTab = 'request';
+                            this.parsePayloads(data);
+                            const modal = document.getElementById('log-modal');
+                            if (modal && !modal.open) modal.showModal();
+                        })
+                        .catch(err => {
+                            alert('Failed to load log detail (' + id + '): ' + err);
+                        });
+                },
+
+                closeDetail(pushState = true) {
+                    this.selectedLog = null;
+                    this.forceFullRender = false;
+                    const modal = document.getElementById('log-modal');
+                    if (modal && modal.open) modal.close();
+
+                    // Revert URL to /logs
+                    if (pushState) {
+                        const newUrl = '/logs' + (this.days !== 14 ? '?days=' + this.days : '');
+                        history.pushState(null, '', newUrl);
+                    }
+                },
+
+                // Extract and format message content from various formats (string, array of parts, object)
+                formatContentPart(content) {
+                    if (content === null || content === undefined) return '';
+                    if (typeof content === 'string') return content;
+                    if (Array.isArray(content)) {
+                        return content.map(part => {
+                            if (part.type === 'text') return part.text || '';
+                            if (part.type === 'image_url') {
+                                const url = part.image_url?.url || '';
+                                const shortUrl = url.length > 60 ? url.slice(0, 60) + '...' : url;
+                                return `[Image: ${shortUrl}]`;
+                            }
+                            return JSON.stringify(part);
+                        }).join('\n\n');
+                    }
+                    if (typeof content === 'object') {
+                        return JSON.stringify(content, null, 2);
+                    }
+                    return String(content);
+                },
+
+                // Parse both request and response into unfolded message structures
+                parsePayloads(log) {
+                    // 1. Parse Request
+                    const rawReq = log.request_body || '';
+                    let reqMessages = [];
+                    let reqParams = [];
+                    let prompt = null;
+
+                    if (rawReq) {
+                        try {
+                            const parsed = JSON.parse(rawReq);
+                            if (Array.isArray(parsed.messages)) {
+                                reqMessages = parsed.messages.map(m => ({
+                                    role: m.role || 'user',
+                                    content: this.formatContentPart(m.content),
+                                    tool_calls: m.tool_calls,
+                                    _collapsed: false
+                                }));
+                            } else if (parsed.prompt) {
+                                prompt = this.formatContentPart(parsed.prompt);
+                            } else if (parsed.input) {
+                                prompt = this.formatContentPart(parsed.input);
+                            }
+
+                            // Extract key parameters
+                            for (const [k, v] of Object.entries(parsed)) {
+                                if (!['messages', 'prompt', 'input'].includes(k)) {
+                                    reqParams.push({
+                                        key: k,
+                                        value: typeof v === 'object' ? JSON.stringify(v) : String(v)
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            prompt = rawReq;
+                        }
+                    }
+
+                    this.parsedRequest = {
+                        messages: reqMessages,
+                        paramsList: reqParams,
+                        prompt: prompt,
+                        rawText: rawReq,
+                        _promptCollapsed: false
+                    };
+
+                    // 2. Parse Response
+                    const rawResp = log.response_body || '';
+                    let respContent = '';
+                    let respReasoning = '';
+                    let respRole = 'assistant';
+                    let respFinish = '';
+                    let isStream = false;
+                    let respError = null;
+                    let toolCalls = null;
+
+                    if (rawResp) {
+                        // Check for SSE Stream format
+                        if (rawResp.includes('data:') && (rawResp.includes('[DONE]') || rawResp.includes('"delta"'))) {
+                            isStream = true;
+                            const lines = rawResp.split('\n');
+                            for (const line of lines) {
+                                const trimmed = line.trim();
+                                if (!trimmed.startsWith('data:')) continue;
+                                const payload = trimmed.slice(5).trim();
+                                if (!payload || payload === '[DONE]') continue;
+                                try {
+                                    const chunk = JSON.parse(payload);
+                                    if (chunk.choices && chunk.choices[0]) {
+                                        const c = chunk.choices[0];
+                                        const delta = c.delta || {};
+                                        if (delta.role) respRole = delta.role;
+                                        if (delta.content) respContent += delta.content;
+                                        if (delta.reasoning_content) respReasoning += delta.reasoning_content;
+                                        if (c.finish_reason) respFinish = c.finish_reason;
+                                        if (delta.tool_calls) {
+                                            if (!toolCalls) toolCalls = [];
+                                            toolCalls.push(...delta.tool_calls);
+                                        }
+                                    }
+                                } catch (e) {}
+                            }
+                        } else {
+                            // Standard JSON response
+                            try {
+                                const parsed = JSON.parse(rawResp);
+                                if (parsed.error) {
+                                    respError = parsed.error.message || JSON.stringify(parsed.error);
+                                }
+                                if (Array.isArray(parsed.choices) && parsed.choices[0]) {
+                                    const c = parsed.choices[0];
+                                    const m = c.message || {};
+                                    if (m.role) respRole = m.role;
+                                    respContent = this.formatContentPart(m.content);
+                                    if (m.reasoning_content) respReasoning = m.reasoning_content;
+                                    if (c.finish_reason) respFinish = c.finish_reason;
+                                    if (m.tool_calls) toolCalls = m.tool_calls;
+                                }
+                            } catch (e) {
+                                respContent = rawResp;
+                            }
+                        }
+                    }
+
+                    if (log.status_code >= 400 && !respError && rawResp) {
+                        respError = `HTTP ${log.status_code}`;
+                    }
+
+                    this.parsedResponse = {
+                        content: respContent,
+                        reasoning: respReasoning,
+                        role: respRole,
+                        finishReason: respFinish,
+                        isStream: isStream,
+                        error: respError,
+                        tool_calls: toolCalls,
+                        _collapsed: false
+                    };
+                },
+
+                setAllMessagesCollapsed(collapsed) {
+                    if (this.parsedRequest && this.parsedRequest.messages) {
+                        this.parsedRequest.messages.forEach(m => m._collapsed = collapsed);
+                    }
+                },
+
+                getCurrentRawBody() {
+                    if (!this.selectedLog) return '';
+                    return this.activeBodyTab === 'request' 
+                        ? (this.selectedLog.request_body || '') 
+                        : (this.selectedLog.response_body || '');
+                },
+
+                currentBodyLength() {
+                    return this.getCurrentRawBody().length;
+                },
+
+                currentBodyIsLarge() {
+                    return this.currentBodyLength() > SAFE_PREVIEW_LIMIT;
+                },
+
+                renderCurrentRawBody() {
+                    const raw = this.getCurrentRawBody();
+                    if (!raw) return '(empty body)';
+
+                    if (this.currentBodyIsLarge() && !this.forceFullRender) {
+                        return raw.slice(0, SAFE_PREVIEW_LIMIT) + '\n\n... [Truncated: showing first ' + this.formatBytes(SAFE_PREVIEW_LIMIT) + ' of ' + this.formatBytes(raw.length) + '. Use "Download JSON" or "Copy Content" to retrieve full payload]';
+                    }
+
+                    if (raw.length <= SAFE_PREVIEW_LIMIT) {
+                        try {
+                            const parsed = JSON.parse(raw);
+                            return JSON.stringify(parsed, null, 2);
+                        } catch (e) {
+                            return raw;
+                        }
+                    }
+                    return raw;
+                },
+
+                // Copy either current message text or full body
+                copyCurrentContent() {
+                    let text = '';
+                    if (this.viewMode === 'raw') {
+                        text = this.getCurrentRawBody();
+                    } else if (this.activeBodyTab === 'request') {
+                        if (this.parsedRequest.messages && this.parsedRequest.messages.length > 0) {
+                            text = this.parsedRequest.messages.map(m => `[${m.role.toUpperCase()}]\n${m.content}`).join('\n\n---\n\n');
+                        } else {
+                            text = this.parsedRequest.prompt || this.parsedRequest.rawText;
+                        }
+                    } else {
+                        text = this.parsedResponse.content;
+                        if (this.parsedResponse.reasoning) {
+                            text = `[REASONING]\n${this.parsedResponse.reasoning}\n\n[RESPONSE]\n${text}`;
+                        }
+                    }
+
+                    if (!text) return;
+                    navigator.clipboard.writeText(text).then(() => {
+                        this.copiedTarget = 'content';
+                        setTimeout(() => { this.copiedTarget = null; }, 2000);
+                    });
+                },
+
+                copyText(text, targetName) {
+                    if (!text) return;
+                    navigator.clipboard.writeText(text).then(() => {
+                        this.copiedTarget = targetName;
+                        setTimeout(() => { this.copiedTarget = null; }, 2000);
+                    });
+                },
+
+                // Download exact raw JSON file
+                downloadCurrentBody() {
+                    const text = this.getCurrentRawBody();
+                    if (!text || !this.selectedLog) return;
+                    const filename = `${this.activeBodyTab}_${this.selectedLog.id}.json`;
+                    const blob = new Blob([text], { type: 'application/json;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                },
+
+                formatStatus(code) {
+                    if (!code) return '-';
+                    if (code === 499) return '499 Canceled';
+                    return String(code);
+                },
+
+                statusBadgeClass(code) {
+                    if (!code) return 'badge';
+                    if (code >= 200 && code < 300) return 'badge badge-status-ok';
+                    if (code === 499) return 'badge badge-status-canceled';
+                    return 'badge badge-status-err';
+                },
+
+                formatBytes(bytes) {
+                    if (!bytes || bytes === 0) return '0 B';
+                    const k = 1024;
+                    const sizes = ['B', 'KB', 'MB', 'GB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+                },
+
+                formatNumber(n) {
+                    if (n === null || n === undefined) return '0';
+                    return n.toLocaleString();
+                },
+
+                formatDuration(ms) {
+                    if (ms === null || ms === undefined) return '-';
+                    if (ms < 1000) return ms + 'ms';
+                    return (ms / 1000).toFixed(2) + 's';
+                },
+
+                formatDate(s) {
+                    if (!s) return '-';
+                    const d = new Date(s);
+                    const pad = n => String(n).padStart(2, '0');
+                    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                },
+
+                getReqMsgCount(log) {
+                    if (log.messages_count !== undefined && log.messages_count !== null) return log.messages_count;
+                    return 0;
+                },
+
+                getRespMsgCount(log) {
+                    if (log.status_code >= 400) return 0;
+                    if (log.response_messages !== undefined && log.response_messages !== null) return log.response_messages;
+                    return 1;
+                },
+
+                formatPreview(text) {
+                    if (!text) return '-';
+                    const clean = text.replace(/[\r\n\t]+/g, ' ').trim();
+                    if (clean.length > 50) return clean.slice(0, 50) + '...';
+                    return clean;
+                }
+            }
+        }
+    </script>
+</body>
+</html>

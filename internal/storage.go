@@ -284,8 +284,56 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 			rl.id, rl.created_at, rl.model, COALESCE(rl.provider, ''), rl.path, 
 			rs.status_code, rs.duration_ms, 
 			COALESCE(ul.total_tokens, 0),
-			COALESCE(SUBSTR(rb.content, 1, 200), ''),
-			COALESCE(SUBSTR(rsb.content, 1, 200), '')
+			CASE 
+				WHEN json_valid(rb.content) = 1 THEN 
+					COALESCE(
+						json_array_length(rb.content, '$.messages'),
+						json_array_length(rb.content, '$.input'),
+						CASE WHEN json_extract(rb.content, '$.prompt') IS NOT NULL THEN 1 ELSE NULL END,
+						CASE WHEN json_extract(rb.content, '$.input') IS NOT NULL THEN 1 ELSE NULL END,
+						1
+					)
+				WHEN rb.content IS NOT NULL AND LENGTH(rb.content) > 0 THEN 1
+				ELSE 0
+			END AS req_messages,
+			CASE 
+				WHEN rs.status_code >= 400 THEN 0
+				WHEN json_valid(rsb.content) = 1 THEN 
+					COALESCE(json_array_length(rsb.content, '$.choices'), 1)
+				WHEN rsb.content LIKE 'data:%' THEN 1
+				WHEN rsb.content IS NOT NULL AND LENGTH(rsb.content) > 0 THEN 1
+				ELSE 0
+			END AS resp_messages,
+			CASE 
+				WHEN json_valid(rb.content) = 1 THEN 
+					SUBSTR(
+						TRIM(COALESCE(
+							json_extract(rb.content, '$.messages[0].content[0].text'),
+							json_extract(rb.content, '$.messages[0].content'),
+							json_extract(rb.content, '$.messages[1].content[0].text'),
+							json_extract(rb.content, '$.messages[1].content'),
+							json_extract(rb.content, '$.prompt'),
+							json_extract(rb.content, '$.input[0]'),
+							json_extract(rb.content, '$.input'),
+							rb.content
+						)),
+						1, 150
+					)
+				ELSE SUBSTR(TRIM(COALESCE(rb.content, '')), 1, 150)
+			END AS req_preview,
+			CASE 
+				WHEN json_valid(rsb.content) = 1 THEN 
+					SUBSTR(
+						TRIM(COALESCE(
+							json_extract(rsb.content, '$.choices[0].message.content'),
+							json_extract(rsb.content, '$.choices[0].text'),
+							json_extract(rsb.content, '$.error.message'),
+							rsb.content
+						)),
+						1, 150
+					)
+				ELSE SUBSTR(TRIM(COALESCE(rsb.content, '')), 1, 150)
+			END AS resp_preview
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
@@ -307,6 +355,8 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 		if err := rows.Scan(
 			&l.ID, &l.CreatedAt, &l.Model, &l.Provider, &l.Path,
 			&l.StatusCode, &l.DurationMS, &l.TotalTokens,
+			&l.MessagesCount,
+			&l.ResponseMessages,
 			&reqPrev, &resPrev,
 		); err != nil {
 			return nil, fmt.Errorf("scan log entry: %w", err)
@@ -327,7 +377,27 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 			rs.status_code, rs.duration_ms, 
 			COALESCE(rsb.content, ''),
 			COALESCE(rb.content, ''),
-			COALESCE(ul.total_tokens, 0)
+			COALESCE(ul.total_tokens, 0),
+			CASE 
+				WHEN json_valid(rb.content) = 1 THEN 
+					COALESCE(
+						json_array_length(rb.content, '$.messages'),
+						json_array_length(rb.content, '$.input'),
+						CASE WHEN json_extract(rb.content, '$.prompt') IS NOT NULL THEN 1 ELSE NULL END,
+						CASE WHEN json_extract(rb.content, '$.input') IS NOT NULL THEN 1 ELSE NULL END,
+						1
+					)
+				WHEN rb.content IS NOT NULL AND LENGTH(rb.content) > 0 THEN 1
+				ELSE 0
+			END AS req_messages,
+			CASE 
+				WHEN rs.status_code >= 400 THEN 0
+				WHEN json_valid(rsb.content) = 1 THEN 
+					COALESCE(json_array_length(rsb.content, '$.choices'), 1)
+				WHEN rsb.content LIKE 'data:%' THEN 1
+				WHEN rsb.content IS NOT NULL AND LENGTH(rsb.content) > 0 THEN 1
+				ELSE 0
+			END AS resp_messages
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
@@ -339,6 +409,8 @@ func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 		&d.StatusCode, &d.DurationMS, &resBody,
 		&reqBody,
 		&d.TotalTokens,
+		&d.MessagesCount,
+		&d.ResponseMessages,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query request detail: %w", err)
