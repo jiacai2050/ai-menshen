@@ -21,6 +21,7 @@ import (
 
 const (
 	authHeaderName      = "Authorization"
+	providerPathPrefix  = "/provider/"
 	reportModelsPath    = "/__report/models"
 	reportProvidersPath = "/__report/providers"
 	reportSummaryPath   = "/__report/summary"
@@ -53,8 +54,8 @@ func NewGateway(cfg Config, storage *Storage) (*Gateway, error) {
 
 	timeout := time.Duration(cfg.Upstream.Timeout) * time.Second
 	clients := make(map[string]*http.Client)
-	bases := make(map[string]*url.URL, len(activeProviders))
-	for _, p := range activeProviders {
+	bases := make(map[string]*url.URL, len(cfg.Providers))
+	for _, p := range cfg.Providers {
 		if _, exists := bases[p.BaseURL]; !exists {
 			base, err := url.Parse(p.BaseURL)
 			if err != nil {
@@ -144,6 +145,34 @@ func (g *Gateway) pickProvider() ProviderConfig {
 	return g.activeProviders[len(g.activeProviders)-1]
 }
 
+// resolveProvider determines the provider to handle the request.
+// If the path starts with "/provider/<provider>/", it selects that provider explicitly
+// (disabling failover) and rewrites r.URL.Path to strip the "/provider/<provider>" prefix.
+// If the prefix is absent, it picks an active provider by weighted random.
+func (g *Gateway) resolveProvider(r *http.Request) (ProviderConfig, bool, error) {
+	if strings.HasPrefix(r.URL.Path, providerPathPrefix) {
+		rest := r.URL.Path[len(providerPathPrefix):]
+		var provName, remainingPath string
+		if idx := strings.IndexByte(rest, '/'); idx != -1 {
+			provName = rest[:idx]
+			remainingPath = rest[idx:]
+		} else {
+			provName = rest
+			remainingPath = "/"
+		}
+
+		provider, ok := g.cfg.Providers[provName]
+		if !ok {
+			return ProviderConfig{}, false, fmt.Errorf("unknown provider %q", provName)
+		}
+
+		r.URL.Path = remainingPath
+		return provider, true, nil
+	}
+
+	return g.pickProvider(), false, nil
+}
+
 // shouldFailover returns true if the upstream response indicates we should
 // try the next provider: network errors, HTTP 5xx, or select 4xx codes
 // where a different provider may succeed.
@@ -229,8 +258,14 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	provider, explicit, err := g.resolveProvider(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	if !isAuditablePath(r.URL.Path) {
-		g.proxyPassthrough(w, r)
+		g.proxyPassthrough(w, r, provider)
 		return
 	}
 
@@ -241,8 +276,6 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-
-	provider := g.pickProvider()
 
 	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider, g.cfg.Cache.Enable)
 	if err != nil {
@@ -279,13 +312,13 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if meta.Stream {
-		g.proxyStream(w, r, requestBody, meta, requestLog, provider)
+		g.proxyStream(w, r, requestBody, meta, requestLog, provider, !explicit)
 		return
 	}
 
-	// Non-stream: try provider, failover to remaining active providers on failure
+	// Non-stream: try provider, failover to remaining active providers on failure (if not explicitly requested)
 	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
-	if shouldFailover(resp, err) && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
+	if !explicit && shouldFailover(resp, err) && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
 		if err != nil {
 			logError("[%s] upstream request failed for %s (%.3fs): %v", requestLog.ID, provider.Name, duration.Seconds(), err)
 		} else {
@@ -346,9 +379,9 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog RequestLog, provider ProviderConfig) {
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog RequestLog, provider ProviderConfig, canFailover bool) {
 	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
-	if shouldFailover(resp, err) && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
+	if canFailover && shouldFailover(resp, err) && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
 		if err != nil {
 			logError("[%s] stream upstream request failed for %s (%.3fs): %v", requestLog.ID, provider.Name, duration.Seconds(), err)
 		} else {
@@ -621,8 +654,7 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(content)
 }
 
-func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
-	provider := g.pickProvider()
+func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request, provider ProviderConfig) {
 	resp, duration, err := g.forwardUpstream(r, r.Body, provider)
 	if err != nil {
 		logError("[passthrough] [%s] upstream request failed: %v", provider.Name, err)

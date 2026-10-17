@@ -300,3 +300,174 @@ func TestProviderUsageReports(t *testing.T) {
 		t.Fatalf("endpoint len(reports) = %d, want 2", len(endpointReports))
 	}
 }
+
+func TestResolveProvider(t *testing.T) {
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"primary":  {Name: "primary", BaseURL: "https://primary.example", Weight: 10},
+			"disabled": {Name: "disabled", BaseURL: "https://disabled.example", Weight: 0},
+		},
+	}
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	// 1. Unspecified: uses pickProvider
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
+	p, explicit, err := gateway.resolveProvider(req)
+	if err != nil || explicit || p.Name != "primary" || req.URL.Path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %v, %v), want primary, explicit=false", p, explicit, err)
+	}
+
+	// 2. Explicit active provider via /provider/ prefix
+	req = httptest.NewRequest(http.MethodPost, "/provider/primary/chat/completions", nil)
+	p, explicit, err = gateway.resolveProvider(req)
+	if err != nil || !explicit || p.Name != "primary" || req.URL.Path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %v, %v), want primary, explicit=true, path=/chat/completions", p, explicit, err)
+	}
+
+	// 3. Explicit zero-weight provider via /provider/ prefix
+	req = httptest.NewRequest(http.MethodPost, "/provider/disabled/chat/completions", nil)
+	p, explicit, err = gateway.resolveProvider(req)
+	if err != nil || !explicit || p.Name != "disabled" || req.URL.Path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %v, %v), want disabled, explicit=true, path=/chat/completions", p, explicit, err)
+	}
+
+	// 4. Non-existent provider via /provider/ prefix
+	req = httptest.NewRequest(http.MethodPost, "/provider/nonexistent/chat/completions", nil)
+	_, _, err = gateway.resolveProvider(req)
+	if err == nil || !strings.Contains(err.Error(), `"nonexistent"`) {
+		t.Fatalf("resolveProvider() error = %v, want unknown provider error", err)
+	}
+
+	// 5. Bare /provider/<name> without trailing path
+	req = httptest.NewRequest(http.MethodGet, "/provider/primary", nil)
+	p, explicit, err = gateway.resolveProvider(req)
+	if err != nil || !explicit || p.Name != "primary" || req.URL.Path != "/" {
+		t.Fatalf("resolveProvider() = (%+v, %v, %v, path=%q), want primary, explicit=true, path=/", p, explicit, err, req.URL.Path)
+	}
+}
+
+func TestServeAPIHTTPWithProviderPathPrefix(t *testing.T) {
+	var receivedByA, receivedByB bool
+	var querySeenByB, pathSeenByB string
+
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedByA = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"response A"}}]}`)
+	}))
+	defer serverA.Close()
+
+	serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedByB = true
+		pathSeenByB = r.URL.Path
+		querySeenByB = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"response B"}}]}`)
+	}))
+	defer serverB.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"provA": {Name: "provA", BaseURL: serverA.URL, Weight: 100},
+			"provB": {Name: "provB", BaseURL: serverB.URL, Weight: 1},
+		},
+		Failover: FailoverConfig{Enable: true},
+		Storage:  StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	// 1. Explicitly request provB via /provider/provB path prefix
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/provider/provB/chat/completions?custom=yes", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	gateway.ServeAPIHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", rec.Code)
+	}
+	if receivedByA || !receivedByB {
+		t.Fatalf("expected request routed to provB only (A=%v, B=%v)", receivedByA, receivedByB)
+	}
+	if pathSeenByB != "/chat/completions" {
+		t.Fatalf("pathSeenByB = %q, want '/chat/completions' with /provider/provB stripped", pathSeenByB)
+	}
+	if querySeenByB != "custom=yes" {
+		t.Fatalf("querySeenByB = %q, want 'custom=yes' preserved", querySeenByB)
+	}
+
+	// 2. Request nonexistent provider returns 400
+	req = httptest.NewRequest(http.MethodPost, "/provider/invalid/chat/completions", strings.NewReader(body))
+	rec = httptest.NewRecorder()
+	gateway.ServeAPIHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want 400 Bad Request", rec.Code)
+	}
+
+	// 3. Explicit provider does not failover when it errors
+	serverErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "provErr 500 error", http.StatusInternalServerError)
+	}))
+	defer serverErr.Close()
+
+	cfg.Providers["provErr"] = ProviderConfig{Name: "provErr", BaseURL: serverErr.URL, Weight: 1}
+	gatewayWithErr, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	receivedByA = false
+	req = httptest.NewRequest(http.MethodPost, "/provider/provErr/chat/completions", strings.NewReader(body))
+	rec = httptest.NewRecorder()
+	gatewayWithErr.ServeAPIHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status code = %d, want 500 from provErr without failover", rec.Code)
+	}
+	if receivedByA {
+		t.Fatal("should not failover to provA when provider was explicitly requested")
+	}
+}
+
+func TestProxyPassthroughWithProviderPathPrefix(t *testing.T) {
+	var requestedURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedURL = r.URL.String()
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"upstream": {Name: "upstream", BaseURL: server.URL, Weight: 1},
+		},
+	}
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/provider/upstream/models?extra=1", nil)
+	rec := httptest.NewRecorder()
+	gateway.ServeAPIHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", rec.Code)
+	}
+	if requestedURL != "/models?extra=1" {
+		t.Fatalf("upstream received URL = %q, want '/models?extra=1'", requestedURL)
+	}
+}

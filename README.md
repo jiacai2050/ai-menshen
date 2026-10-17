@@ -249,6 +249,30 @@ weight = 2
 
 In this example, requests will trend toward an `80% / 20%` split over time. The selection is probabilistic per request, so short runs may vary.
 
+### Explicit Provider Selection
+
+You can explicitly route a request to a specific provider by using the `/provider/<name>` URL path prefix:
+
+```bash
+# REST API
+curl "http://localhost:8080/provider/deepseek/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "deepseek-chat", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+```python
+# Python SDK (set base_url with /provider/<name> prefix)
+client = OpenAI(
+    base_url="http://localhost:8080/provider/deepseek",
+    api_key="your-auth-token",
+)
+```
+
+- **Direct Routing**: Weighted random selection is bypassed and the specified provider is selected directly. Even providers configured with `weight = 0` can be targeted explicitly.
+- **Failover Behavior**: Automatic failover is disabled when a provider is explicitly chosen, ensuring that upstream errors are returned directly to the client without unexpected redirection.
+- **Transparent Forwarding**: The `/provider/<name>` prefix is automatically stripped before forwarding to upstream endpoints.
+- **Validation**: If the requested provider does not exist in the configuration, `ai-menshen` immediately returns HTTP `400 Bad Request`.
+
 ## Failover
 
 When `failover.enable = true` (the default), a failed request is automatically retried against the remaining providers:
