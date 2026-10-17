@@ -24,6 +24,7 @@ import (
 const (
 	authHeaderName      = "Authorization"
 	providerPathPrefix  = "/provider/"
+	providerPathRoot    = "/provider"
 	reportModelsPath    = "/__report/models"
 	reportProvidersPath = "/__report/providers"
 	reportSummaryPath   = "/__report/summary"
@@ -149,32 +150,40 @@ func (g *Gateway) pickProvider() ProviderConfig {
 	return g.activeProviders[len(g.activeProviders)-1]
 }
 
-// resolveProvider determines the provider to handle the request.
-// If the path starts with "/provider/<provider>/", it selects that provider explicitly
-// (disabling failover) and rewrites r.URL.Path to strip the "/provider/<provider>" prefix.
-// If the prefix is absent, it picks an active provider by weighted random.
-func (g *Gateway) resolveProvider(r *http.Request) (ProviderConfig, bool, error) {
-	if strings.HasPrefix(r.URL.Path, providerPathPrefix) {
-		rest := r.URL.Path[len(providerPathPrefix):]
-		var provName, remainingPath string
-		if idx := strings.IndexByte(rest, '/'); idx != -1 {
-			provName = rest[:idx]
-			remainingPath = rest[idx:]
-		} else {
-			provName = rest
-			remainingPath = "/"
-		}
-
-		provider, ok := g.cfg.Providers[provName]
-		if !ok {
-			return ProviderConfig{}, false, fmt.Errorf("unknown provider %q", provName)
-		}
-
-		r.URL.Path = remainingPath
-		return provider, true, nil
+// resolveProvider determines the provider to handle the request and the path
+// that should be used upstream.
+//
+// If path starts with "/provider/<provider>/", the named provider is selected
+// explicitly (disabling failover) and the returned path has the
+// "/provider/<provider>" prefix stripped. Otherwise an active provider is
+// picked by weighted random and path is returned unchanged. The request itself
+// is never modified, so resolveProvider stays idempotent and callers decide
+// when to apply the rewritten path.
+func (g *Gateway) resolveProvider(path string) (ProviderConfig, string, bool, error) {
+	if path == providerPathRoot {
+		return ProviderConfig{}, path, false, fmt.Errorf("missing provider name: use %s<name>/...", providerPathPrefix)
+	}
+	if !strings.HasPrefix(path, providerPathPrefix) {
+		return g.pickProvider(), path, false, nil
 	}
 
-	return g.pickProvider(), false, nil
+	provName, remainingPath, found := strings.Cut(path[len(providerPathPrefix):], "/")
+	if provName == "" {
+		return ProviderConfig{}, path, false, fmt.Errorf("missing provider name: use %s<name>/...", providerPathPrefix)
+	}
+	if !found {
+		// Bare "/provider/<name>" targets the upstream root.
+		remainingPath = "/"
+	} else {
+		remainingPath = "/" + remainingPath
+	}
+
+	provider, ok := g.cfg.Providers[provName]
+	if !ok {
+		return ProviderConfig{}, path, false, fmt.Errorf("unknown provider %q", provName)
+	}
+
+	return provider, remainingPath, true, nil
 }
 
 // shouldFailover returns true if the upstream response indicates we should
@@ -262,10 +271,16 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	provider, explicit, err := g.resolveProvider(r)
+	provider, path, explicit, err := g.resolveProvider(r.URL.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if path != r.URL.Path {
+		// The provider prefix was stripped, so the raw (escaped) path no longer
+		// encodes r.URL.Path and has to be dropped.
+		r.URL.Path = path
+		r.URL.RawPath = ""
 	}
 
 	if !isAuditablePath(r.URL.Path) {

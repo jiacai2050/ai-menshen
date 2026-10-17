@@ -314,39 +314,63 @@ func TestResolveProvider(t *testing.T) {
 		t.Fatalf("NewGateway() error = %v", err)
 	}
 
-	// 1. Unspecified: uses pickProvider
+	// 1. Unspecified: uses pickProvider and leaves the path alone
 	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
-	p, explicit, err := gateway.resolveProvider(req)
-	if err != nil || explicit || p.Name != "primary" || req.URL.Path != "/chat/completions" {
-		t.Fatalf("resolveProvider() = (%+v, %v, %v), want primary, explicit=false", p, explicit, err)
+	p, path, explicit, err := gateway.resolveProvider(req.URL.Path)
+	if err != nil || explicit || p.Name != "primary" || path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want primary, explicit=false, path=/chat/completions", p, path, explicit, err)
 	}
 
 	// 2. Explicit active provider via /provider/ prefix
 	req = httptest.NewRequest(http.MethodPost, "/provider/primary/chat/completions", nil)
-	p, explicit, err = gateway.resolveProvider(req)
-	if err != nil || !explicit || p.Name != "primary" || req.URL.Path != "/chat/completions" {
-		t.Fatalf("resolveProvider() = (%+v, %v, %v), want primary, explicit=true, path=/chat/completions", p, explicit, err)
+	p, path, explicit, err = gateway.resolveProvider(req.URL.Path)
+	if err != nil || !explicit || p.Name != "primary" || path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want primary, explicit=true, path=/chat/completions", p, path, explicit, err)
 	}
 
 	// 3. Explicit zero-weight provider via /provider/ prefix
 	req = httptest.NewRequest(http.MethodPost, "/provider/disabled/chat/completions", nil)
-	p, explicit, err = gateway.resolveProvider(req)
-	if err != nil || !explicit || p.Name != "disabled" || req.URL.Path != "/chat/completions" {
-		t.Fatalf("resolveProvider() = (%+v, %v, %v), want disabled, explicit=true, path=/chat/completions", p, explicit, err)
+	p, path, explicit, err = gateway.resolveProvider(req.URL.Path)
+	if err != nil || !explicit || p.Name != "disabled" || path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want disabled, explicit=true, path=/chat/completions", p, path, explicit, err)
 	}
 
 	// 4. Non-existent provider via /provider/ prefix
 	req = httptest.NewRequest(http.MethodPost, "/provider/nonexistent/chat/completions", nil)
-	_, _, err = gateway.resolveProvider(req)
+	_, _, _, err = gateway.resolveProvider(req.URL.Path)
 	if err == nil || !strings.Contains(err.Error(), `"nonexistent"`) {
 		t.Fatalf("resolveProvider() error = %v, want unknown provider error", err)
 	}
 
-	// 5. Bare /provider/<name> without trailing path
+	// 5. Bare /provider/<name> without trailing path targets the upstream root
 	req = httptest.NewRequest(http.MethodGet, "/provider/primary", nil)
-	p, explicit, err = gateway.resolveProvider(req)
-	if err != nil || !explicit || p.Name != "primary" || req.URL.Path != "/" {
-		t.Fatalf("resolveProvider() = (%+v, %v, %v, path=%q), want primary, explicit=true, path=/", p, explicit, err, req.URL.Path)
+	p, path, explicit, err = gateway.resolveProvider(req.URL.Path)
+	if err != nil || !explicit || p.Name != "primary" || path != "/" {
+		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want primary, explicit=true, path=/", p, path, explicit, err)
+	}
+
+	// 6. Trailing slash is preserved so nested upstream paths survive
+	req = httptest.NewRequest(http.MethodPost, "/provider/primary/v1/chat/completions", nil)
+	p, path, explicit, err = gateway.resolveProvider(req.URL.Path)
+	if err != nil || !explicit || p.Name != "primary" || path != "/v1/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want primary, explicit=true, path=/v1/chat/completions", p, path, explicit, err)
+	}
+
+	// 7. Missing provider name is rejected instead of falling back to random routing
+	for _, badPath := range []string{"/provider", "/provider/", "/provider//chat/completions"} {
+		_, _, _, err = gateway.resolveProvider(badPath)
+		if err == nil || !strings.Contains(err.Error(), "missing provider name") {
+			t.Fatalf("resolveProvider(%q) error = %v, want missing provider name", badPath, err)
+		}
+	}
+
+	// 8. resolveProvider does not touch the request
+	req = httptest.NewRequest(http.MethodPost, "/provider/primary/chat/completions", nil)
+	if _, _, _, err := gateway.resolveProvider(req.URL.Path); err != nil {
+		t.Fatalf("resolveProvider() error = %v", err)
+	}
+	if req.URL.Path != "/provider/primary/chat/completions" {
+		t.Fatalf("req.URL.Path = %q, want the request to be left untouched", req.URL.Path)
 	}
 }
 
@@ -417,7 +441,21 @@ func TestServeAPIHTTPWithProviderPathPrefix(t *testing.T) {
 		t.Fatalf("status code = %d, want 400 Bad Request", rec.Code)
 	}
 
-	// 3. Explicit provider does not failover when it errors
+	// 3. Missing provider name returns 400 instead of routing by weight
+	receivedByA, receivedByB = false, false
+	for _, missingNamePath := range []string{"/provider", "/provider/", "/provider//chat/completions"} {
+		req = httptest.NewRequest(http.MethodPost, missingNamePath, strings.NewReader(body))
+		rec = httptest.NewRecorder()
+		gateway.ServeAPIHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status code for %q = %d, want 400 Bad Request", missingNamePath, rec.Code)
+		}
+	}
+	if receivedByA || receivedByB {
+		t.Fatalf("missing provider name must not reach a provider (A=%v, B=%v)", receivedByA, receivedByB)
+	}
+
+	// 4. Explicit provider does not failover when it errors
 	serverErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "provErr 500 error", http.StatusInternalServerError)
 	}))
@@ -552,4 +590,3 @@ func (c *cancelingResponseWriter) Flush() {
 		flusher.Flush()
 	}
 }
-

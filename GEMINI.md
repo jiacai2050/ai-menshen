@@ -2,71 +2,9 @@
 
 This project is a lightweight OpenAI-compatible proxy service written in Go.
 
-## Current Focus
+## Design Invariants
 
-ai-menshen now does more than basic auth injection:
-
-- forwards OpenAI-compatible requests to one configured upstream provider chosen per request
-- automatically fails over to another provider on network errors, HTTP 5xx, or 429
-- keeps the real upstream API key in a local TOML config file
-- optionally overrides the client `model` with the selected provider's `model`
-- records both non-stream and stream requests and responses in SQLite
-- extracts token usage from normal JSON responses and stream SSE events when `usage` is present
-- optionally reuses matching cached non-stream responses
-- exposes a model-level usage report at `GET /__report/models`
-
-## Architecture Overview
-
-The repository follows a simple Go layout:
-
-- `main.go`: thin binary entrypoint at the root
-- `internal/config.go`: TOML config loading and CLI parsing
-- `internal/proxy.go`: request handling, upstream forwarding, cache replay, and reports
-- `internal/storage.go`: SQLite setup and persistence
-- `internal/normalize.go`: request normalization and cache key generation
-- `internal/usage.go`: usage extraction from JSON responses
-- `internal/cache.go`: cacheability rules
-- `internal/models.go`: shared structs
-- `configs/config.example.toml`: example runtime config
-
-## Configuration
-
-Runtime configuration comes from a TOML file such as `config.toml`. The repository keeps an example at `configs/config.example.toml`.
-
-The binary entrypoint supports a minimal CLI:
-
-- `-config`: path to the TOML config file
-- `-h` / `--help`: print usage information
-
-Important fields:
-
-- `listen`: local listen address
-- `providers`: provider tables keyed by name (`[providers.<name>]`); one provider is selected per request using weight
-  - *(table key)*: provider name, must match `[A-Za-z0-9_-]+` and be unique; it is the provider's identity in logs and the audit DB
-  - `base_url`: upstream OpenAI-compatible base URL
-  - `api_key`: upstream API key
-  - `model`: optional model override for forwarded requests
-  - `weight`: request-distribution weight; if omitted it is treated as `0`, and `0` disables the provider. At least one provider must have a weight greater than `0`.
-- `storage.sqlite.path`: SQLite database path
-- `cache.enable`: enables non-stream cache replay
-- `cache.max_body_bytes`: maximum cached response body size
-- `logging.log_request_body`: whether to store request bodies
-- `logging.log_response_body`: whether to store response bodies
-- `failover.enable`: enables automatic failover to other providers (default `true`)
-- `verbose`: enables debug logging to stdout
-
-## Runtime Behavior
-
-- **Failover**: when a provider returns a network error, HTTP 5xx, or select 4xx (401, 403, 404, 408, 413, 422, 429), the proxy automatically retries with the remaining active providers, heaviest weight first (ties broken by name, so the order is deterministic). The first provider is chosen by weighted random. For streaming requests, failover only happens at the connection stage — once SSE data has begun flowing to the client the stream is not retried. If all providers fail (or failover is disabled), the last upstream response is passed through as-is rather than replaced with a synthetic 502. Failover applies only to auditable paths (`/chat/completions`, `/responses`); passthrough paths use a single provider.
-- **Provider Selection**: providers are chosen by weighted random by default. Clients can explicitly target a provider with the URL path prefix `/provider/<name>` (bypasses random selection, supports `weight = 0` providers, disables failover, strips `/provider/<name>` before upstream forwarding, and returns 400 for unknown providers).
-- Non-stream requests are candidates for auditing, usage extraction, and cache replay.
-- Stream requests are also audited and can contribute usage stats, but cache replay remains non-stream only.
-- Cloudflare AI Gateway still uses `cf-aig-authorization` instead of `Authorization`.
-- Model and provider-level aggregated usage are available at `GET /__report/models` and `GET /__report/providers`.
-- The SQLite schema is intentionally minimal:
-  - `request_logs`
-  - `response_logs`
-  - `usage_logs`
+- **The response cache is provider-agnostic on purpose.** Cache keys are built from the request path (after stripping any `/provider/<name>` prefix) plus the request body, never from the provider name. A response cached from one provider may therefore be replayed for a request that is routed to another provider, including one pinned explicitly via `/provider/<name>`: an identical request should cost zero upstream tokens no matter which provider produced the cached answer. Do not add the provider name to `buildCacheKey`, and do not skip cache replay when a provider is selected explicitly.
 
 ## Development Conventions
 
