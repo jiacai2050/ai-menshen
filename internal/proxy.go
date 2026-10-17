@@ -2,9 +2,11 @@ package aimenshen
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand/v2"
@@ -29,6 +31,8 @@ const (
 	reportLogsPath      = "/__report/logs"
 	reportLogDetailPath = "/__report/log"
 )
+
+const statusClientClosedRequest = 499
 
 var streamBufferPool = sync.Pool{
 	New: func() any {
@@ -422,13 +426,19 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	buffer := *bufferPtr
 	defer streamBufferPool.Put(bufferPtr)
 
-	var readFailed bool
+	var readFailed, writeFailed, clientCanceled bool
 	for {
 		n, readErr := resp.Body.Read(buffer)
 		if n > 0 {
 			chunk := buffer[:n]
 			if _, err := w.Write(chunk); err != nil {
-				logError("[%s] [%s] stream response write failed: %v", requestLog.ID, requestLog.Provider, err)
+				if errors.Is(r.Context().Err(), context.Canceled) {
+					logInfo("[%s] [%s] client canceled stream during write", requestLog.ID, requestLog.Provider)
+					clientCanceled = true
+				} else {
+					logError("[%s] [%s] stream response write failed: %v", requestLog.ID, requestLog.Provider, err)
+					writeFailed = true
+				}
 				break
 			}
 			if flusher != nil {
@@ -449,8 +459,13 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 			break
 		}
 		if readErr != nil {
-			logError("[%s] [%s] stream response copy failed: %v", requestLog.ID, requestLog.Provider, readErr)
-			readFailed = true
+			if errors.Is(readErr, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+				logInfo("[%s] [%s] client canceled stream: %v", requestLog.ID, requestLog.Provider, readErr)
+				clientCanceled = true
+			} else {
+				logError("[%s] [%s] stream response copy failed: %v", requestLog.ID, requestLog.Provider, readErr)
+				readFailed = true
+			}
 			break
 		}
 	}
@@ -476,7 +491,9 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	}
 
 	statusCode := resp.StatusCode
-	if readFailed {
+	if clientCanceled {
+		statusCode = statusClientClosedRequest
+	} else if readFailed || writeFailed {
 		statusCode = http.StatusBadGateway
 	}
 

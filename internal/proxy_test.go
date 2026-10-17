@@ -1,6 +1,7 @@
 package aimenshen
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -471,3 +472,84 @@ func TestProxyPassthroughWithProviderPathPrefix(t *testing.T) {
 		t.Fatalf("upstream received URL = %q, want '/models?extra=1'", requestedURL)
 	}
 }
+
+func TestProxyStreamClientCanceledLogs499(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: chunk1\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Block until client disconnects
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"upstream": {Name: "upstream", BaseURL: server.URL, Weight: 1},
+		},
+		Storage: StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reqBody := `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(reqBody)).WithContext(ctx)
+
+	// Custom response writer that cancels context after first chunk
+	cancelAfterFirst := &cancelingResponseWriter{
+		ResponseWriter: httptest.NewRecorder(),
+		cancel:         cancel,
+	}
+
+	gateway.ServeAPIHTTP(cancelAfterFirst, req)
+
+	// Wait briefly for async log saving to settle
+	time.Sleep(50 * time.Millisecond)
+
+	logs, err := storage.RequestLogs(1, 10)
+	if err != nil {
+		t.Fatalf("RequestLogs() error = %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected request log to be saved")
+	}
+	if logs[0].StatusCode != 499 {
+		t.Fatalf("status code in storage = %d, want 499 (Client Closed Request)", logs[0].StatusCode)
+	}
+}
+
+type cancelingResponseWriter struct {
+	http.ResponseWriter
+	cancel context.CancelFunc
+	called bool
+}
+
+func (c *cancelingResponseWriter) Write(b []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(b)
+	if !c.called {
+		c.called = true
+		c.cancel() // cancel client context right after first write
+	}
+	return n, err
+}
+
+func (c *cancelingResponseWriter) Flush() {
+	if flusher, ok := c.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
