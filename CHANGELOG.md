@@ -2,17 +2,22 @@
 
 ## Unreleased
 
+## v1.4.0 (2026-10-17)
+
+### Breaking Changes
+- `providers` configuration changed from `[[providers]]` array to named TOML tables (`[providers.<name>]`). Names must match `[A-Za-z0-9_-]+` and be unique.
+
 ### Added
-- Providers are now keyed by name (`[providers.openai]`); the name identifies the provider in logs, the audit DB, and the dashboard
-- `request_logs.provider` column records which provider served each request (migrate older databases with `python3 scripts/migrate_provider_column.py <db>`)
+- **Named Providers & Pinning**: Providers are now identified by name in logs, database (`request_logs.provider`), and dashboard. Added `/provider/<name>/...` path prefix for explicit provider routing.
+- **Enhanced Dashboard**:
+  - Audit Logs: detailed inspector with permalinks (`/logs/<id>`), structured message viewer with reasoning/tools folding, and quick search/filter.
+  - Overview: added Requests Trend chart alongside Tokens Trend, plus Model & Provider usage breakdowns.
+  - Native Auto Dark Mode support and extracted `/assets/app.css`.
+- Support tracking client-canceled requests (logged as HTTP 499).
 
 ### Changed
-- **Breaking**: `providers` uses TOML tables keyed by name (`[providers.<name>]`) instead of `[[providers]]` arrays; names must match `[A-Za-z0-9_-]+` and be unique
-- Failover order is deterministic: heaviest `weight` first, ties broken by name (previously config order); logs identify providers by name
-- Performance: SSE usage extraction skips JSON decoding for events without a `usage` field and reuses its line buffer (~6-7x faster per stream chunk set)
-- Performance: request rewrites (provider model override, `stream_options` injection) splice untouched top-level fields verbatim instead of re-encoding the whole payload
-- Performance: provider base URLs are parsed once at startup instead of per request; failed upstream bodies are drained with a size cap before closing
-- Added micro benchmarks for request analysis and usage extraction (`internal/perf_bench_test.go`)
+- Failover order is now deterministic: heaviest weight first, ties broken by provider name.
+- Performance: optimized SSE usage extraction (~6-7x faster), zero-copy payload rewrites, and startup URL pre-parsing.
 
 ## v1.3.0 (2026-04-19)
 
