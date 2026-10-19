@@ -1,14 +1,18 @@
 package aimenshen
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -163,6 +167,155 @@ func TestServeAPIHTTPFailoverAllNetworkErrorsReturns502(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status code = %d, want 502 Bad Gateway", rec.Code)
+	}
+}
+
+func TestServeAPIHTTPSingleProviderNetworkErrorKeepsUpstreamCause(t *testing.T) {
+	serverDead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := serverDead.URL
+	serverDead.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"dead": {Name: "dead", BaseURL: deadURL, Weight: 1},
+		},
+		Storage: StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status code = %d, want 502 Bad Gateway", rec.Code)
+	}
+	if !strings.Contains(logBuf.String(), "send upstream request") {
+		t.Fatalf("log output missing upstream cause:\n%s", logBuf.String())
+	}
+
+	// saveExchange is asynchronous; wait for the worker to flush.
+	var detail *LogDetail
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		logs, err := storage.RequestLogs(1, 10)
+		if err != nil {
+			t.Fatalf("RequestLogs() error = %v", err)
+		}
+		if len(logs) > 0 {
+			detail, err = storage.RequestDetail(logs[0].ID)
+			if err != nil {
+				t.Fatalf("RequestDetail() error = %v", err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if detail == nil {
+		t.Fatal("stored exchange not found")
+	}
+	if !strings.Contains(detail.ResponseBody, "send upstream request") {
+		t.Errorf("stored response body = %q, want upstream error cause", detail.ResponseBody)
+	}
+
+	var errPayload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(detail.ResponseBody), &errPayload); err != nil {
+		t.Fatalf("unmarshal error body %q: %v", detail.ResponseBody, err)
+	}
+	if !strings.Contains(errPayload.Error.Message, "send upstream request") {
+		t.Errorf("error message = %q, want upstream error cause", errPayload.Error.Message)
+	}
+}
+
+func TestServeAPIHTTPFailoverKeepsMetadataOfReturnedResponse(t *testing.T) {
+	server500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream failed", http.StatusInternalServerError)
+	}))
+	defer server500.Close()
+
+	serverDead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := serverDead.URL
+	serverDead.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"primary":   {Name: "primary", BaseURL: deadURL, Weight: 1000},
+			"secondary": {Name: "secondary", BaseURL: server500.URL, Weight: 50},
+			"tertiary":  {Name: "tertiary", BaseURL: deadURL, Weight: 1},
+		},
+		Failover: FailoverConfig{Enable: true},
+		Storage:  StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+
+	// Since primary (weight 1000) was picked first, failover tries secondary (500), then tertiary (network error).
+	// The returned response should be secondary's 500.
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status code = %d, want 500", rec.Code)
+	}
+
+	var detail *LogDetail
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		logs, err := storage.RequestLogs(1, 10)
+		if err != nil {
+			t.Fatalf("RequestLogs() error = %v", err)
+		}
+		if len(logs) > 0 {
+			detail, err = storage.RequestDetail(logs[0].ID)
+			if err != nil {
+				t.Fatalf("RequestDetail() error = %v", err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if detail == nil {
+		t.Fatal("stored exchange not found")
+	}
+	if detail.Provider != "secondary" {
+		t.Errorf("stored provider = %q, want secondary", detail.Provider)
+	}
+	if detail.StatusCode != http.StatusInternalServerError {
+		t.Errorf("stored status code = %d, want 500", detail.StatusCode)
 	}
 }
 
@@ -806,3 +959,55 @@ func TestStorageDailyUsage(t *testing.T) {
 	}
 }
 
+func TestServeAPIHTTPFailoverShortCircuitsOnClientContextCanceled(t *testing.T) {
+	var cancel context.CancelFunc
+	serverPrimary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Cancel client context upon primary receiving the request, simulating client disconnect
+		if cancel != nil {
+			cancel()
+		}
+		http.Error(w, "primary failed", http.StatusInternalServerError)
+	}))
+	defer serverPrimary.Close()
+
+	var secondaryHits int32
+	serverSecondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&secondaryHits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer serverSecondary.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"primary":   {Name: "primary", BaseURL: serverPrimary.URL, Weight: 1000},
+			"secondary": {Name: "secondary", BaseURL: serverSecondary.URL, Weight: 1},
+		},
+		Failover: FailoverConfig{Enable: true},
+		Storage:  StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	cancel = cancelFn
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(reqBody)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+
+	if atomic.LoadInt32(&secondaryHits) > 0 {
+		t.Errorf("secondary provider was hit %d times, want 0 when client context is canceled", secondaryHits)
+	}
+}

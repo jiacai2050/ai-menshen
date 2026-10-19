@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- 502 responses now keep the upstream error cause: it is appended to the `[502]` ERROR log line and stored as the response body in the audit log. Previously the cause was dropped when failover did not run (explicit `/provider/<name>`, failover disabled, or a single provider).
+
 ## v1.4.0 (2026-10-17)
 
 ### Breaking Changes

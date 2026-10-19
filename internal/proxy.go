@@ -337,42 +337,28 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if meta.Stream {
-		g.proxyStream(w, r, requestBody, meta, requestLog, provider, !explicit)
+		g.proxyStream(w, r, requestBody, meta, &requestLog, provider, !explicit)
 		return
 	}
 
 	// Non-stream: try provider, failover to remaining active providers on failure (if not explicitly requested)
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
-	if !explicit && shouldFailover(resp, err) && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
-		if err != nil {
-			logError("[%s] upstream request failed for %s (%.3fs): %v", requestLog.ID, provider.Name, duration.Seconds(), err)
-		} else {
-			drainAndCloseBody(resp)
-			logError("[%s] upstream returned %d from %s (%.3fs)", requestLog.ID, resp.StatusCode, provider.Name, duration.Seconds())
-		}
-		resp, duration, meta = g.failoverNonStream(r, requestBody, &requestLog, provider)
-	}
-
+	resp, meta, err := g.forwardWithFailover(r, requestBody, &requestLog, provider, meta, !explicit)
 	if resp == nil {
-		logError("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds())
-		g.saveExchange(requestLog, ResponseLog{
-			RequestID:  requestLog.ID,
-			StatusCode: http.StatusBadGateway,
-			DurationMS: duration.Milliseconds(),
-		}, nil)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		g.respondBadGateway(w, r, requestLog, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logError("[%s] [%s] failed to read upstream response: %v", requestLog.ID, requestLog.Provider, err)
-		logError("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds())
+		elapsed := time.Since(startedAt)
+		cause := "read upstream response: " + failureCause(err)
+		logError("[%s] [%s] [%d] %s %s (%.3fs): %s", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), elapsed.Seconds(), cause)
 		g.saveExchange(requestLog, ResponseLog{
-			RequestID:  requestLog.ID,
-			StatusCode: http.StatusBadGateway,
-			DurationMS: duration.Milliseconds(),
+			RequestID:    requestLog.ID,
+			StatusCode:   http.StatusBadGateway,
+			ResponseBody: errorBody(cause),
+			DurationMS:   elapsed.Milliseconds(),
 		}, nil)
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -387,11 +373,12 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		logError("[%s] [%s] usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
 	}
 
+	elapsed := time.Since(startedAt)
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
 		StatusCode:   resp.StatusCode,
 		ResponseBody: g.responseBodyForStorage(r, meta, resp.StatusCode, responseBody),
-		DurationMS:   duration.Milliseconds(),
+		DurationMS:   elapsed.Milliseconds(),
 	}
 	g.saveExchange(requestLog, responseLog, usage)
 
@@ -401,29 +388,13 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		logError("[%s] [%s] write response failed: %v", requestLog.ID, requestLog.Provider, err)
 	}
 
-	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
+	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, resp.StatusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog RequestLog, provider ProviderConfig, canFailover bool) {
-	resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), provider)
-	if canFailover && shouldFailover(resp, err) && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
-		if err != nil {
-			logError("[%s] stream upstream request failed for %s (%.3fs): %v", requestLog.ID, provider.Name, duration.Seconds(), err)
-		} else {
-			drainAndCloseBody(resp)
-			logError("[%s] stream upstream returned %d from %s (%.3fs)", requestLog.ID, resp.StatusCode, provider.Name, duration.Seconds())
-		}
-		resp, duration, meta = g.failoverNonStream(r, requestBody, &requestLog, provider)
-	}
-
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog *RequestLog, provider ProviderConfig, canFailover bool) {
+	resp, meta, err := g.forwardWithFailover(r, requestBody, requestLog, provider, meta, canFailover)
 	if resp == nil {
-		logError("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds())
-		g.saveExchange(requestLog, ResponseLog{
-			RequestID:  requestLog.ID,
-			StatusCode: http.StatusBadGateway,
-			DurationMS: duration.Milliseconds(),
-		}, nil)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		g.respondBadGateway(w, r, *requestLog, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -491,10 +462,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 		}
 	}
 
-	elapsed := duration
-	if total := time.Since(requestLog.CreatedAt); total > elapsed {
-		elapsed = total
-	}
+	elapsed := time.Since(requestLog.CreatedAt)
 
 	if err := usageExtractor.Finalize(); err != nil {
 		logError("[%s] [%s] stream usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
@@ -526,7 +494,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 		ResponseBody: responseBody,
 		DurationMS:   elapsed.Milliseconds(),
 	}
-	g.saveExchange(requestLog, responseLog, usageExtractor.Usage())
+	g.saveExchange(*requestLog, responseLog, usageExtractor.Usage())
 
 	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, statusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
@@ -703,7 +671,8 @@ func (g *Gateway) handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request, provider ProviderConfig) {
-	resp, duration, err := g.forwardUpstream(r, r.Body, provider)
+	startedAt := time.Now()
+	resp, _, err := g.forwardUpstream(r, r.Body, provider)
 	if err != nil {
 		logError("[passthrough] [%s] upstream request failed: %v", provider.Name, err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
@@ -717,9 +686,8 @@ func (g *Gateway) proxyPassthrough(w http.ResponseWriter, r *http.Request, provi
 		logError("[passthrough] [%s] response copy failed: %v", provider.Name, err)
 	}
 
-	if g.cfg.Verbose {
-		logInfo("[passthrough] [%s] [%d] %s %s (%.3fs)", provider.Name, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
-	}
+	duration := time.Since(startedAt)
+	logInfo("[passthrough] [%s] [%d] %s %s (%.3fs)", provider.Name, resp.StatusCode, r.Method, r.URL.String(), duration.Seconds())
 }
 
 // drainLimit caps how much of a failed upstream body is drained before the
@@ -734,45 +702,140 @@ func drainAndCloseBody(resp *http.Response) {
 	resp.Body.Close()
 }
 
-func (g *Gateway) failoverNonStream(r *http.Request, requestBody []byte, requestLog *RequestLog, tried ProviderConfig) (*http.Response, time.Duration, RequestMeta) {
-	var lastResp *http.Response
-	var lastDuration time.Duration
-	var lastMeta RequestMeta
-	for i, p := range g.activeProviders {
-		if p.Name == tried.Name {
-			continue
-		}
+// failureCause describes why an upstream attempt failed, for logs and storage.
+func failureCause(err error) string {
+	if err == nil {
+		return "unknown upstream error"
+	}
+	return err.Error()
+}
 
-		meta, err := AnalyzeRequest(r.URL.Path, requestBody, p, g.cfg.Cache.Enable)
-		if err != nil {
-			logError("failed to analyze request for failover provider: %v", err)
-			meta = RequestMeta{EffectiveBody: requestBody}
+type errorResponseBody struct {
+	Error errorDetail `json:"error"`
+}
+
+type errorDetail struct {
+	Message string `json:"message"`
+}
+
+// errorBody wraps a failure cause in a JSON body so the stored exchange keeps
+// the upstream error visible after the request is gone.
+func errorBody(cause string) []byte {
+	body, err := json.Marshal(errorResponseBody{
+		Error: errorDetail{Message: cause},
+	})
+	if err != nil {
+		return nil
+	}
+	return body
+}
+
+type attemptResult struct {
+	resp     *http.Response
+	meta     RequestMeta
+	provider ProviderConfig
+	err      error
+}
+
+func (g *Gateway) forwardWithFailover(
+	r *http.Request,
+	requestBody []byte,
+	requestLog *RequestLog,
+	primary ProviderConfig,
+	primaryMeta RequestMeta,
+	allowFailover bool,
+) (*http.Response, RequestMeta, error) {
+	candidates := []ProviderConfig{primary}
+	if allowFailover && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
+		for _, p := range g.activeProviders {
+			if p.Name != primary.Name {
+				candidates = append(candidates, p)
+			}
 		}
-		lastMeta = meta
-		requestLog.Model = meta.EffectiveModel
-		requestLog.Provider = p.Name
-		requestLog.CacheKey = meta.CacheKey
-		requestLog.RequestBody = g.requestBodyForStorage(meta)
-		logInfo("[%s] failover to provider %s (attempt %d/%d)", requestLog.ID, p.Name, i+1, len(g.activeProviders))
+	}
+
+	var (
+		lastHTTP *attemptResult
+		lastErr  *attemptResult
+	)
+
+	for i, p := range candidates {
+		meta := primaryMeta
+		if i > 0 {
+			if r.Context().Err() != nil {
+				// Client has disconnected or timed out; do not attempt remaining candidates.
+				break
+			}
+			var err error
+			meta, err = AnalyzeRequest(r.URL.Path, requestBody, p, g.cfg.Cache.Enable)
+			if err != nil {
+				logError("failed to analyze request for failover provider: %v", err)
+				meta = RequestMeta{EffectiveBody: requestBody}
+			}
+			logInfo("[%s] failover to provider %s (attempt %d/%d)", requestLog.ID, p.Name, i+1, len(candidates))
+		}
 
 		resp, duration, err := g.forwardUpstream(r, bytes.NewReader(meta.EffectiveBody), p)
-		lastDuration = duration
+		att := &attemptResult{
+			resp:     resp,
+			meta:     meta,
+			provider: p,
+			err:      err,
+		}
+
 		if err != nil {
+			lastErr = att
 			logError("[%s] upstream request failed for %s (%.3fs): %v", requestLog.ID, p.Name, duration.Seconds(), err)
 			continue
 		}
+
 		if !shouldFailover(resp, nil) {
 			// Success
-			drainAndCloseBody(lastResp)
-			return resp, duration, meta
+			if lastHTTP != nil {
+				drainAndCloseBody(lastHTTP.resp)
+			}
+			g.applyLogMetadata(requestLog, att.provider, att.meta)
+			return resp, meta, nil
 		}
+
 		logError("[%s] upstream returned %d from %s (%.3fs)", requestLog.ID, resp.StatusCode, p.Name, duration.Seconds())
-		// Close previous failed resp, keep this one in case it's the last
-		drainAndCloseBody(lastResp)
-		lastResp = resp
+		if lastHTTP != nil {
+			drainAndCloseBody(lastHTTP.resp)
+		}
+		lastHTTP = att
 	}
-	// Return last resp (may be 5xx) so caller can pass it through
-	return lastResp, lastDuration, lastMeta
+
+	// Prefer returning the last received HTTP response (e.g. 5xx/429) so caller can pass it through.
+	chosen := lastHTTP
+	if chosen == nil {
+		chosen = lastErr
+	}
+	if chosen != nil {
+		g.applyLogMetadata(requestLog, chosen.provider, chosen.meta)
+		return chosen.resp, chosen.meta, chosen.err
+	}
+
+	return nil, primaryMeta, errors.New("failover exhausted without any attempt")
+}
+
+func (g *Gateway) applyLogMetadata(requestLog *RequestLog, provider ProviderConfig, meta RequestMeta) {
+	requestLog.Model = meta.EffectiveModel
+	requestLog.Provider = provider.Name
+	requestLog.CacheKey = meta.CacheKey
+	requestLog.RequestBody = g.requestBodyForStorage(meta)
+}
+
+func (g *Gateway) respondBadGateway(w http.ResponseWriter, r *http.Request, requestLog RequestLog, err error) {
+	duration := time.Since(requestLog.CreatedAt)
+	cause := failureCause(err)
+	logError("[%s] [%s] [%d] %s %s (%.3fs): %s", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds(), cause)
+	g.saveExchange(requestLog, ResponseLog{
+		RequestID:    requestLog.ID,
+		StatusCode:   http.StatusBadGateway,
+		ResponseBody: errorBody(cause),
+		DurationMS:   duration.Milliseconds(),
+	}, nil)
+	http.Error(w, "upstream request failed", http.StatusBadGateway)
 }
 
 func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider ProviderConfig) (*http.Response, time.Duration, error) {

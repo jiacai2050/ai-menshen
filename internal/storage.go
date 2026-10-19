@@ -278,32 +278,38 @@ func (s *Storage) FindCachedResponse(cacheKey string, maxAge int64) (*CachedResp
 	return &cached, nil
 }
 
+const (
+	sqlReqMessagesExpr = `CASE 
+		WHEN json_valid(rb.content) = 1 THEN 
+			COALESCE(
+				json_array_length(rb.content, '$.messages'),
+				json_array_length(rb.content, '$.input'),
+				CASE WHEN json_extract(rb.content, '$.prompt') IS NOT NULL THEN 1 ELSE NULL END,
+				CASE WHEN json_extract(rb.content, '$.input') IS NOT NULL THEN 1 ELSE NULL END,
+				1
+			)
+		WHEN rb.content IS NOT NULL AND LENGTH(rb.content) > 0 THEN 1
+		ELSE 0
+	END`
+
+	sqlRespMessagesExpr = `CASE 
+		WHEN rs.status_code >= 400 THEN 0
+		WHEN json_valid(rsb.content) = 1 THEN 
+			COALESCE(json_array_length(rsb.content, '$.choices'), 1)
+		WHEN rsb.content LIKE 'data:%' THEN 1
+		WHEN rsb.content IS NOT NULL AND LENGTH(rsb.content) > 0 THEN 1
+		ELSE 0
+	END`
+)
+
 func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
-	rows, err := s.db.Query(`
+	query := fmt.Sprintf(`
 		SELECT 
 			rl.id, rl.created_at, rl.model, COALESCE(rl.provider, ''), rl.path, 
 			rs.status_code, rs.duration_ms, 
 			COALESCE(ul.total_tokens, 0),
-			CASE 
-				WHEN json_valid(rb.content) = 1 THEN 
-					COALESCE(
-						json_array_length(rb.content, '$.messages'),
-						json_array_length(rb.content, '$.input'),
-						CASE WHEN json_extract(rb.content, '$.prompt') IS NOT NULL THEN 1 ELSE NULL END,
-						CASE WHEN json_extract(rb.content, '$.input') IS NOT NULL THEN 1 ELSE NULL END,
-						1
-					)
-				WHEN rb.content IS NOT NULL AND LENGTH(rb.content) > 0 THEN 1
-				ELSE 0
-			END AS req_messages,
-			CASE 
-				WHEN rs.status_code >= 400 THEN 0
-				WHEN json_valid(rsb.content) = 1 THEN 
-					COALESCE(json_array_length(rsb.content, '$.choices'), 1)
-				WHEN rsb.content LIKE 'data:%' THEN 1
-				WHEN rsb.content IS NOT NULL AND LENGTH(rsb.content) > 0 THEN 1
-				ELSE 0
-			END AS resp_messages,
+			%s AS req_messages,
+			%s AS resp_messages,
 			CASE 
 				WHEN json_valid(rb.content) = 1 THEN 
 					SUBSTR(
@@ -342,7 +348,8 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 		WHERE rl.created_at >= (unixepoch('now', ?) * 1000)
 		ORDER BY rl.created_at DESC
 		LIMIT ?
-	`, fmt.Sprintf("-%d days", days), limit)
+	`, sqlReqMessagesExpr, sqlRespMessagesExpr)
+	rows, err := s.db.Query(query, fmt.Sprintf("-%d days", days), limit)
 	if err != nil {
 		return nil, fmt.Errorf("query request logs: %w", err)
 	}
@@ -371,40 +378,23 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 func (s *Storage) RequestDetail(id string) (*LogDetail, error) {
 	var d LogDetail
 	var resBody, reqBody []byte
-	err := s.db.QueryRow(`
+	query := fmt.Sprintf(`
 		SELECT 
 			rl.id, rl.created_at, rl.model, COALESCE(rl.provider, ''), rl.path, 
 			rs.status_code, rs.duration_ms, 
 			COALESCE(rsb.content, ''),
 			COALESCE(rb.content, ''),
 			COALESCE(ul.total_tokens, 0),
-			CASE 
-				WHEN json_valid(rb.content) = 1 THEN 
-					COALESCE(
-						json_array_length(rb.content, '$.messages'),
-						json_array_length(rb.content, '$.input'),
-						CASE WHEN json_extract(rb.content, '$.prompt') IS NOT NULL THEN 1 ELSE NULL END,
-						CASE WHEN json_extract(rb.content, '$.input') IS NOT NULL THEN 1 ELSE NULL END,
-						1
-					)
-				WHEN rb.content IS NOT NULL AND LENGTH(rb.content) > 0 THEN 1
-				ELSE 0
-			END AS req_messages,
-			CASE 
-				WHEN rs.status_code >= 400 THEN 0
-				WHEN json_valid(rsb.content) = 1 THEN 
-					COALESCE(json_array_length(rsb.content, '$.choices'), 1)
-				WHEN rsb.content LIKE 'data:%' THEN 1
-				WHEN rsb.content IS NOT NULL AND LENGTH(rsb.content) > 0 THEN 1
-				ELSE 0
-			END AS resp_messages
+			%s AS req_messages,
+			%s AS resp_messages
 		FROM request_logs rl
 		JOIN response_logs rs ON rs.request_id = rl.id
 		LEFT JOIN usage_logs ul ON ul.request_id = rl.id
 		LEFT JOIN request_bodies rb ON rb.request_id = rl.id
 		LEFT JOIN response_bodies rsb ON rsb.request_id = rl.id
 		WHERE rl.id = ?
-	`, id).Scan(
+	`, sqlReqMessagesExpr, sqlRespMessagesExpr)
+	err := s.db.QueryRow(query, id).Scan(
 		&d.ID, &d.CreatedAt, &d.Model, &d.Provider, &d.Path,
 		&d.StatusCode, &d.DurationMS, &resBody,
 		&reqBody,

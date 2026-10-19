@@ -12,3 +12,4 @@ This project is a lightweight OpenAI-compatible proxy service written in Go.
 - Prefer standard library components unless a focused dependency is justified.
 - Preserve transparent proxy behavior for normal client usage.
 - Keep the entrypoint thin under `cmd/` and place private implementation under `internal/`.
+- Run `make fmt` after modifying code to ensure consistent formatting.
