@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import (
 	"bytes"
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jiacai2050/ai-menshen/internal/web"
+	"github.com/jiacai2050/menshen/internal/web"
 )
 
 const (
@@ -150,6 +150,44 @@ func (g *Gateway) pickProvider() ProviderConfig {
 	return g.activeProviders[len(g.activeProviders)-1]
 }
 
+func (g *Gateway) providersForCapability(capName string) []ProviderConfig {
+	var matched []ProviderConfig
+	for _, p := range g.activeProviders {
+		if p.HasCapability(capName) {
+			matched = append(matched, p)
+		}
+	}
+	return matched
+}
+
+func (g *Gateway) pickProviderForCapability(capName string) (ProviderConfig, error) {
+	candidates := g.providersForCapability(capName)
+	if len(candidates) == 0 {
+		return ProviderConfig{}, fmt.Errorf("no active provider configured for capability %q", capName)
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+
+	totalWeight := 0
+	for _, p := range candidates {
+		totalWeight += p.Weight
+	}
+	if totalWeight <= 0 {
+		return candidates[0], nil
+	}
+
+	pick := mrand.IntN(totalWeight)
+	for _, provider := range candidates {
+		pick -= provider.Weight
+		if pick < 0 {
+			return provider, nil
+		}
+	}
+
+	return candidates[len(candidates)-1], nil
+}
+
 // resolveProvider determines the provider to handle the request and the path
 // that should be used upstream.
 //
@@ -164,7 +202,7 @@ func (g *Gateway) resolveProvider(path string) (ProviderConfig, string, bool, er
 		return ProviderConfig{}, path, false, fmt.Errorf("missing provider name: use %s<name>/...", providerPathPrefix)
 	}
 	if !strings.HasPrefix(path, providerPathPrefix) {
-		return g.pickProvider(), path, false, nil
+		return ProviderConfig{}, path, false, nil
 	}
 
 	provName, remainingPath, found := strings.Cut(path[len(providerPathPrefix):], "/")
@@ -215,7 +253,7 @@ func (g *Gateway) ServeWebHTTP(w http.ResponseWriter, r *http.Request) {
 	if g.cfg.Auth.Enable {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != g.cfg.Auth.User || pass != g.cfg.Auth.Password {
-			w.Header().Set("WWW-Authenticate", `Basic realm="ai-menshen"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="menshen"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -270,8 +308,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	if g.cfg.Auth.Enable {
 		authHeader := r.Header.Get(authHeaderName)
+		apiKeyHeader := r.Header.Get("x-api-key")
 		expected := "Bearer " + g.cfg.Auth.Token
-		if authHeader != expected {
+		if authHeader != expected && apiKeyHeader != g.cfg.Auth.Token {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -289,7 +328,11 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		r.URL.RawPath = ""
 	}
 
-	if !isAuditablePath(r.URL.Path) {
+	proto := findProtocol(r.URL.Path)
+	if proto == nil {
+		if !explicit {
+			provider = g.pickProvider()
+		}
 		g.proxyPassthrough(w, r, provider)
 		return
 	}
@@ -302,7 +345,18 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, err := AnalyzeRequest(r.URL.Path, requestBody, provider, g.cfg.Cache.Enable)
+	// For unpinned requests, select capability-compatible provider BEFORE PrepareBody
+	// so that model overrides and cache key correspond to the actual provider.
+	if !explicit {
+		picked, err := g.pickProviderForCapability(proto.Name())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		provider = picked
+	}
+
+	meta, err := proto.PrepareBody(r.URL.Path, requestBody, provider, g.cfg.Cache.Enable)
 	if err != nil {
 		logError("failed to analyze request: %v", err)
 		// Fallback to original body and default meta
@@ -336,8 +390,16 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Cache missed: validate capability for explicitly selected provider
+	if explicit {
+		if !provider.HasCapability(proto.Name()) {
+			http.Error(w, fmt.Sprintf("provider %q does not support capability %q", provider.Name, proto.Name()), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if meta.Stream {
-		g.proxyStream(w, r, requestBody, meta, &requestLog, provider, !explicit)
+		g.proxyStream(w, r, requestBody, meta, &requestLog, provider, !explicit, proto)
 		return
 	}
 
@@ -354,6 +416,7 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		elapsed := time.Since(startedAt)
 		cause := "read upstream response: " + failureCause(err)
 		logError("[%s] [%s] [%d] %s %s (%.3fs): %s", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), elapsed.Seconds(), cause)
+		requestLog.CacheKey = ""
 		g.saveExchange(requestLog, ResponseLog{
 			RequestID:    requestLog.ID,
 			StatusCode:   http.StatusBadGateway,
@@ -368,16 +431,21 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 		logInfo("Response Body: %s", responseBody)
 	}
 
-	usage, err := ExtractUsage(requestLog.ID, responseBody)
+	usage, err := proto.ExtractUsage(requestLog.ID, responseBody)
 	if err != nil {
 		logError("[%s] [%s] usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
+	}
+
+	canCache := canStoreCachedResponse(r, meta, resp.StatusCode, responseBody, true, g.cfg.Cache)
+	if !canCache {
+		requestLog.CacheKey = ""
 	}
 
 	elapsed := time.Since(startedAt)
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
 		StatusCode:   resp.StatusCode,
-		ResponseBody: g.responseBodyForStorage(r, meta, resp.StatusCode, responseBody),
+		ResponseBody: g.responseBodyForStorage(responseBody, canCache),
 		DurationMS:   elapsed.Milliseconds(),
 	}
 	g.saveExchange(requestLog, responseLog, usage)
@@ -391,7 +459,7 @@ func (g *Gateway) ServeAPIHTTP(w http.ResponseWriter, r *http.Request) {
 	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, resp.StatusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
 
-func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog *RequestLog, provider ProviderConfig, canFailover bool) {
+func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBody []byte, meta RequestMeta, requestLog *RequestLog, provider ProviderConfig, canFailover bool, proto Protocol) {
 	resp, meta, err := g.forwardWithFailover(r, requestBody, requestLog, provider, meta, canFailover)
 	if resp == nil {
 		g.respondBadGateway(w, r, *requestLog, err)
@@ -403,7 +471,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, _ := w.(http.Flusher)
-	usageExtractor := NewSSEUsageExtractor(requestLog.ID)
+	auditor := proto.NewStreamAuditor(requestLog.ID)
 	var captured *bytes.Buffer
 	var limit int64
 	if g.cfg.Logging.LogResponseBody || g.cfg.Verbose || canUseCache(r, meta, g.cfg.Cache) {
@@ -418,7 +486,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 	buffer := *bufferPtr
 	defer streamBufferPool.Put(bufferPtr)
 
-	var readFailed, writeFailed, clientCanceled bool
+	var readFailed, writeFailed, clientCanceled, capturedTruncated bool
 	for {
 		n, readErr := resp.Body.Read(buffer)
 		if n > 0 {
@@ -436,13 +504,17 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 			if flusher != nil {
 				flusher.Flush()
 			}
-			if err := usageExtractor.Write(chunk); err != nil {
+			if err := auditor.Write(chunk); err != nil {
 				logError("[%s] [%s] stream usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
 				// Do not break, keep proxying the stream
 			}
 			if captured != nil {
-				if limit == 0 || int64(captured.Len()) < limit {
+				if limit == 0 {
 					_, _ = captured.Write(chunk)
+				} else if int64(captured.Len()+len(chunk)) <= limit {
+					_, _ = captured.Write(chunk)
+				} else {
+					capturedTruncated = true
 				}
 			}
 		}
@@ -464,10 +536,6 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 
 	elapsed := time.Since(requestLog.CreatedAt)
 
-	if err := usageExtractor.Finalize(); err != nil {
-		logError("[%s] [%s] stream usage extraction failed: %v", requestLog.ID, requestLog.Provider, err)
-	}
-
 	if captured != nil && captured.Len() > 0 {
 		if g.cfg.Verbose {
 			logInfo("Stream Response Body: %s", captured.Bytes())
@@ -486,7 +554,12 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 		statusCode = http.StatusBadGateway
 	}
 
-	responseBody := g.responseBodyForStorage(r, meta, statusCode, capturedBytes)
+	isStreamComplete := auditor.IsComplete() && !capturedTruncated
+	canCache := canStoreCachedResponse(r, meta, statusCode, capturedBytes, isStreamComplete, g.cfg.Cache)
+	if !canCache {
+		requestLog.CacheKey = ""
+	}
+	responseBody := g.responseBodyForStorage(capturedBytes, canCache)
 
 	responseLog := ResponseLog{
 		RequestID:    requestLog.ID,
@@ -494,7 +567,7 @@ func (g *Gateway) proxyStream(w http.ResponseWriter, r *http.Request, requestBod
 		ResponseBody: responseBody,
 		DurationMS:   elapsed.Milliseconds(),
 	}
-	g.saveExchange(*requestLog, responseLog, usageExtractor.Usage())
+	g.saveExchange(*requestLog, responseLog, auditor.Usage())
 
 	logInfo("[%s] [%s] [%d] %s %s (%.3fs)", requestLog.ID, requestLog.Provider, statusCode, r.Method, r.URL.String(), elapsed.Seconds())
 }
@@ -746,10 +819,17 @@ func (g *Gateway) forwardWithFailover(
 	allowFailover bool,
 ) (*http.Response, RequestMeta, error) {
 	candidates := []ProviderConfig{primary}
+	proto := findProtocol(r.URL.Path)
+	capName := ""
+	if proto != nil {
+		capName = proto.Name()
+	}
 	if allowFailover && g.cfg.Failover.Enable && len(g.activeProviders) > 1 {
 		for _, p := range g.activeProviders {
 			if p.Name != primary.Name {
-				candidates = append(candidates, p)
+				if capName == "" || p.HasCapability(capName) {
+					candidates = append(candidates, p)
+				}
 			}
 		}
 	}
@@ -767,7 +847,11 @@ func (g *Gateway) forwardWithFailover(
 				break
 			}
 			var err error
-			meta, err = AnalyzeRequest(r.URL.Path, requestBody, p, g.cfg.Cache.Enable)
+			if proto != nil {
+				meta, err = proto.PrepareBody(r.URL.Path, requestBody, p, g.cfg.Cache.Enable)
+			} else {
+				meta, err = AnalyzeRequest(r.URL.Path, requestBody, p, g.cfg.Cache.Enable)
+			}
 			if err != nil {
 				logError("failed to analyze request for failover provider: %v", err)
 				meta = RequestMeta{EffectiveBody: requestBody}
@@ -829,6 +913,7 @@ func (g *Gateway) respondBadGateway(w http.ResponseWriter, r *http.Request, requ
 	duration := time.Since(requestLog.CreatedAt)
 	cause := failureCause(err)
 	logError("[%s] [%s] [%d] %s %s (%.3fs): %s", requestLog.ID, requestLog.Provider, http.StatusBadGateway, r.Method, r.URL.String(), duration.Seconds(), cause)
+	requestLog.CacheKey = ""
 	g.saveExchange(requestLog, ResponseLog{
 		RequestID:    requestLog.ID,
 		StatusCode:   http.StatusBadGateway,
@@ -850,7 +935,7 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider Prov
 	}
 
 	g.copyRequestHeaders(upstreamRequest.Header, r.Header, provider)
-	g.applyProviderHeaders(upstreamRequest.Header, provider)
+	g.applyProviderHeaders(upstreamRequest.Header, provider, r.URL.Path)
 
 	startedAt := time.Now()
 	resp, err := g.clientForProvider(provider).Do(upstreamRequest)
@@ -862,16 +947,41 @@ func (g *Gateway) forwardUpstream(r *http.Request, body io.Reader, provider Prov
 	return resp, duration, nil
 }
 
-func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderConfig) {
-	// 1. Always clear the client's standard Authorization
-	headers.Del(authHeaderName)
+func isAnthropicPath(path string) bool {
+	p := strings.TrimPrefix(path, "/v1")
+	return p == "/messages" || strings.HasPrefix(p, "/messages/") ||
+		p == "/complete" || strings.HasPrefix(p, "/complete/")
+}
 
-	// 2. Apply APIKey if present
-	if provider.APIKey != "" {
-		headers.Set(authHeaderName, "Bearer "+provider.APIKey)
+func (g *Gateway) applyProviderHeaders(headers http.Header, provider ProviderConfig, path string) {
+	proto := findProtocol(path)
+	if proto != nil {
+		proto.ApplyHeaders(headers, provider)
+	} else if provider.APIKey != "" {
+		// Passthrough path with provider API key configured
+		if isAnthropicPath(path) || (provider.HasCapability(CapAnthropicMessages) && !provider.HasCapability(CapOpenAICompletions)) {
+			// Anthropic target: requires x-api-key and rejects standard Authorization header
+			headers.Del(authHeaderName)
+			headers.Set("x-api-key", provider.APIKey)
+			if headers.Get("anthropic-version") == "" {
+				headers.Set("anthropic-version", "2023-06-01")
+			}
+		} else {
+			// OpenAI or multi-capability general target: Bearer auth
+			headers.Del(authHeaderName)
+			headers.Set(authHeaderName, "Bearer "+provider.APIKey)
+			if provider.HasCapability(CapAnthropicMessages) {
+				// Inject x-api-key as well for dual-capability providers (e.g. OpenRouter / Cloudflare).
+				// Most OpenAI-compatible endpoints ignore extra headers, while Anthropic endpoints accept x-api-key.
+				headers.Set("x-api-key", provider.APIKey)
+				if headers.Get("anthropic-version") == "" {
+					headers.Set("anthropic-version", "2023-06-01")
+				}
+			}
+		}
 	}
 
-	// 3. Apply custom headers (can override Authorization if specified)
+	// Apply custom headers (can override any header if specified)
 	for k, v := range provider.Headers {
 		headers.Set(k, v)
 	}
@@ -904,10 +1014,13 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConf
 		if isHopByHopHeader(key) {
 			continue
 		}
-		if g.isProviderHeader(key, provider) {
+		if g.isProviderHeader(key, values, provider) {
 			continue
 		}
 		if strings.EqualFold(key, "Accept-Encoding") {
+			continue
+		}
+		if strings.EqualFold(key, "Content-Length") {
 			continue
 		}
 		dst.Del(key)
@@ -917,9 +1030,26 @@ func (g *Gateway) copyRequestHeaders(dst, src http.Header, provider ProviderConf
 	}
 }
 
-func (g *Gateway) isProviderHeader(key string, provider ProviderConfig) bool {
-	if strings.EqualFold(key, authHeaderName) {
-		return true
+func (g *Gateway) isProviderHeader(key string, values []string, provider ProviderConfig) bool {
+	if g.cfg.Auth.Enable {
+		if strings.EqualFold(key, authHeaderName) {
+			// Strip incoming Authorization because it was used to authenticate with this gateway,
+			// preventing the gateway's token from leaking upstream.
+			return true
+		}
+		if strings.EqualFold(key, "x-api-key") {
+			// If incoming x-api-key matches the gateway token, strip it to prevent leakage upstream.
+			for _, v := range values {
+				if v == g.cfg.Auth.Token {
+					return true
+				}
+			}
+		}
+	}
+	if provider.APIKey != "" {
+		if strings.EqualFold(key, authHeaderName) || strings.EqualFold(key, "x-api-key") {
+			return true
+		}
 	}
 	for k := range provider.Headers {
 		if strings.EqualFold(key, k) {
@@ -960,8 +1090,8 @@ func (g *Gateway) requestBodyForStorage(meta RequestMeta) []byte {
 	return meta.EffectiveBody
 }
 
-func (g *Gateway) responseBodyForStorage(r *http.Request, meta RequestMeta, statusCode int, responseBody []byte) []byte {
-	if g.cfg.Logging.LogResponseBody || canStoreCachedResponse(r, meta, statusCode, responseBody, g.cfg.Cache) {
+func (g *Gateway) responseBodyForStorage(responseBody []byte, canCache bool) []byte {
+	if g.cfg.Logging.LogResponseBody || canCache {
 		return responseBody
 	}
 	return nil
@@ -975,6 +1105,9 @@ func (g *Gateway) cachedResponseBodyForStorage(responseBody []byte) []byte {
 }
 
 func (g *Gateway) saveExchange(requestLog RequestLog, responseLog ResponseLog, usage *UsageLog) {
+	if g.storage == nil {
+		return
+	}
 	if err := g.storage.SaveExchange(requestLog, responseLog, usage); err != nil {
 		logError("save exchange failed: %v", err)
 	}

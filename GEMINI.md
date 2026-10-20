@@ -1,6 +1,6 @@
-# ai-menshen Context
+# menshen Context
 
-This project is a lightweight OpenAI-compatible proxy service written in Go.
+This project is a lightweight AI gateway service written in Go.
 
 ## Design Invariants
 

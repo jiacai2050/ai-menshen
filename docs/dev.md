@@ -1,6 +1,6 @@
 # Development & Performance Benchmarking
 
-This guide describes how to run and analyze performance benchmarks for **ai-menshen**.
+This guide describes how to run and analyze performance benchmarks for **menshen**.
 
 ## Benchmark Overview
 

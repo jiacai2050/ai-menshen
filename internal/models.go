@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import "time"
 
@@ -22,7 +22,8 @@ type ResponseLog struct {
 }
 
 type UsageLog struct {
-	RequestID        string
+	RequestID string
+	// PromptTokens represents total input tokens processed by the model (including cached tokens).
 	PromptTokens     *int64
 	CompletionTokens *int64
 	TotalTokens      *int64

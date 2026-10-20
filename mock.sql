@@ -1,4 +1,4 @@
--- ai-menshen Mock Data Generator (Ultimate Slim Version)
+-- menshen Mock Data Generator (Ultimate Slim Version)
 -- Matching the schema: request_logs, response_logs, request_bodies, response_bodies, usage_logs
 
 -- 1. Clear existing data

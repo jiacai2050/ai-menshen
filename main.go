@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	aimenshen "github.com/jiacai2050/ai-menshen/internal"
+	menshen "github.com/jiacai2050/menshen/internal"
 )
 
 //go:embed configs/example.toml
@@ -27,7 +27,7 @@ var (
 )
 
 func main() {
-	cli, err := aimenshen.ParseCLI(os.Args, os.Stdout)
+	cli, err := menshen.ParseCLI(os.Args, os.Stdout)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
@@ -36,7 +36,7 @@ func main() {
 	}
 
 	if cli.Version {
-		fmt.Printf("ai-menshen %s\n", Version)
+		fmt.Printf("menshen %s\n", Version)
 		if info, ok := debug.ReadBuildInfo(); ok {
 			for _, setting := range info.Settings {
 				switch setting.Key {
@@ -61,12 +61,12 @@ func main() {
 }
 
 func run(configPath string) error {
-	cfg, err := aimenshen.LoadConfig(configPath)
+	cfg, err := menshen.LoadConfig(configPath)
 	if err != nil {
 		return err
 	}
 
-	storage, err := aimenshen.OpenStorage(cfg.Storage)
+	storage, err := menshen.OpenStorage(cfg.Storage)
 	if err != nil {
 		return err
 	}
@@ -79,15 +79,15 @@ func run(configPath string) error {
 		}
 	}()
 
-	handler, err := aimenshen.NewGateway(cfg, storage)
+	handler, err := menshen.NewGateway(cfg, storage)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("ai-menshen API started on %s", cfg.Listen)
-	log.Printf("ai-menshen Web UI started on %s", cfg.Web.Listen)
+	log.Printf("menshen API started on %s", cfg.Listen)
+	log.Printf("menshen Web UI started on %s", cfg.Web.Listen)
 	for _, provider := range sortedProviders(cfg.Providers) {
-		log.Printf("  provider[%s]: %s (weight=%d)", provider.Name, provider.BaseURL, provider.Weight)
+		log.Printf("  provider[%s]: %s (weight=%d, capabilities=%v)", provider.Name, provider.BaseURL, provider.Weight, provider.Capabilities)
 		if provider.Model != "" {
 			log.Printf("  provider[%s] model override: %s", provider.Name, provider.Model)
 		}
@@ -136,12 +136,12 @@ func run(configPath string) error {
 }
 
 // sortedProviders returns providers ordered by name so startup logs are stable.
-func sortedProviders(providers map[string]aimenshen.ProviderConfig) []aimenshen.ProviderConfig {
-	sorted := make([]aimenshen.ProviderConfig, 0, len(providers))
+func sortedProviders(providers map[string]menshen.ProviderConfig) []menshen.ProviderConfig {
+	sorted := make([]menshen.ProviderConfig, 0, len(providers))
 	for _, provider := range providers {
 		sorted = append(sorted, provider)
 	}
-	slices.SortFunc(sorted, func(a, b aimenshen.ProviderConfig) int {
+	slices.SortFunc(sorted, func(a, b menshen.ProviderConfig) int {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return sorted

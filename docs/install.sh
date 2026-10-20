@@ -2,8 +2,8 @@
 
 set -e
 
-REPO="jiacai2050/ai-menshen"
-BINARY_NAME="ai-menshen"
+REPO="jiacai2050/menshen"
+BINARY_NAME="menshen"
 GITHUB_URL="https://github.com/${REPO}"
 
 # Default values

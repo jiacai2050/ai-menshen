@@ -1,22 +1,22 @@
-# ai-menshen
+# menshen
 
-ai-menshen (门神) is a lightweight, local-first AI Gateway. It proxies any OpenAI-compatible API, providing **Auth Injection (BYOK)**, **Model Overriding**, **Failover**, **Usage Auditing**, and **Response Caching**—all while keeping your API keys and logs strictly under your control.
+menshen (门神) is a lightweight, local-first AI Gateway. It proxies **OpenAI-compatible** and **Anthropic-compatible** APIs (OpenAI Chat Completions, Responses, and Anthropic Messages), providing **Auth Injection (BYOK)**, **Protocol Capability Routing**, **Model Overriding**, **Failover**, **Usage Auditing**, and **Response Caching**—all while keeping your API keys and logs strictly under your control.
 
 > *Single Go binary. Zero external dependencies besides SQLite.*
 
-> https://jiacai2050.github.io/ai-menshen/
+> https://jiacai2050.github.io/menshen/
 
 ```mermaid
 graph TD
     subgraph EXTERNAL [External World]
         direction LR
-        Client([Clients / OpenClaw 🦞])
-        Upstream(["Upstream API<br>(OpenAI/DeepSeek...)"])
+        Client([Clients / SDKs 🦞])
+        Upstream(["Upstream Providers<br>(OpenAI/Anthropic/DeepSeek...)"])
     end
 
     subgraph LOCAL [Local Environment]
         direction TB
-        G["ai-menshen<br>(Standalone Go binary)"]
+        G["menshen<br>(Standalone Go binary)"]
 
         DB[(SQLite)]
         CFG[config.toml]
@@ -25,8 +25,8 @@ graph TD
         G --- CFG
     end
 
-    Client ==>|OpenAI API| G
-    G ==>|Auth Injection| Upstream
+    Client ==>|OpenAI / Anthropic API| G
+    G ==>|Auth & Protocol Headers| Upstream
 
     style EXTERNAL fill:none,stroke:#ccc,stroke-dasharray: 5 5
     style LOCAL fill:#f0f7ff,stroke:#0066cc,stroke-width:2px
@@ -37,8 +37,8 @@ graph TD
 
 ## Built-in Dashboard
 
-ai-menshen ships with a lightweight, built-in dashboard at `http://localhost:8081/`.
-The dashboard runs on a separate Web port from the OpenAI-compatible API proxy.
+menshen ships with a lightweight, built-in dashboard at `http://localhost:8081/`.
+The dashboard runs on a separate Web port from the API proxy.
 
 Zero external CDN calls—all JS/CSS is embedded, making it ideal for offline or air-gapped environments.
 
@@ -53,13 +53,13 @@ Zero external CDN calls—all JS/CSS is embedded, making it ideal for offline or
 *Download and install the pre-built binary from GitHub Releases.*
 
 ```bash
-curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh
+curl -fsSL https://jiacai2050.github.io/menshen/install.sh | sh
 ```
 
 The script supports custom version and installation directory:
 ```bash
 # Pass arguments using sh -s --
-curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh -s -- --version v1.0.0 --prefix /usr/local/bin
+curl -fsSL https://jiacai2050.github.io/menshen/install.sh | sh -s -- --version v1.0.0 --prefix /usr/local/bin
 ```
 
 | Option | Description | Default |
@@ -71,46 +71,47 @@ curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh -s -- --versi
 ### Via Go Install
 
 ```bash
-go install github.com/jiacai2050/ai-menshen@latest
+go install github.com/jiacai2050/menshen@latest
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/jiacai2050/ai-menshen.git
-cd ai-menshen
+git clone https://github.com/jiacai2050/menshen.git
+cd menshen
 make build
-# The binary 'ai-menshen' will be available in the current directory
+# The binary 'menshen' will be available in the current directory
 ```
 
 ## Quick Start
 
 1.  **Install binary** (choose one):
     *   [One-liner (Linux & macOS)](#one-liner-linux--macos)
-    *   `go install github.com/jiacai2050/ai-menshen@latest`
+    *   `go install github.com/jiacai2050/menshen@latest`
     *   [From Source](#from-source)
 
 2.  **Setup config**:
     ```bash
-    mkdir -p ~/.config/ai-menshen
+    mkdir -p ~/.config/menshen
     # Generate the default config
-    ai-menshen -gen-config > ~/.config/ai-menshen/config.toml
+    menshen -gen-config > ~/.config/menshen/config.toml
     # Edit with your upstream API key
-    vi ~/.config/ai-menshen/config.toml
+    vi ~/.config/menshen/config.toml
     ```
 
 3.  **Run**:
     ```bash
-    ai-menshen -config ~/.config/ai-menshen/config.toml
+    menshen -config ~/.config/menshen/config.toml
     ```
 
 4.  **Connect**:
-    Point your OpenAI client to `http://localhost:8080`.
+    Point your OpenAI or Anthropic client to `http://localhost:8080`.
 
+    #### OpenAI Clients
     **REST API**:
     ```bash
-    # `your-auth-token` should match [auth].token if auth.enable = true (can be anything if false)
-    curl http://localhost:8080/chat/completions \
+    # `your-auth-token` matches [auth].token if auth.enable = true (or arbitrary string if false)
+    curl http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer your-auth-token" \
       -d '{
@@ -124,8 +125,8 @@ make build
     from openai import OpenAI
 
     client = OpenAI(
-        base_url="http://localhost:8080",
-        api_key="your-auth-token" # Match [auth].token if auth.enable = true (can be anything if false)
+        base_url="http://localhost:8080/v1",
+        api_key="your-auth-token"  # Match [auth].token if auth.enable = true
     )
 
     # Automatic usage auditing (even for streaming!)
@@ -138,56 +139,87 @@ make build
         print(chunk.choices[0].delta.content or "", end="")
     ```
 
+    #### Anthropic Clients
+    **REST API**:
+    ```bash
+    curl http://localhost:8080/v1/messages \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: your-auth-token" \
+      -H "anthropic-version: 2023-06-01" \
+      -d '{
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "Hello!"}]
+      }'
+    ```
+
+    **Python SDK**:
+    ```python
+    import anthropic
+
+    client = anthropic.Anthropic(
+        base_url="http://localhost:8080",
+        api_key="your-auth-token"
+    )
+
+    message = client.messages.create(
+        model="claude-3-5-sonnet-20241022",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+    print(message.content[0].text)
+    ```
+
 ## Run as Background Service
 
 ### macOS
 
-A launchd plist is provided at [`configs/net.liujiacai.ai-menshen.plist`](configs/net.liujiacai.ai-menshen.plist).
+A launchd plist is provided at [`configs/net.liujiacai.menshen.plist`](configs/net.liujiacai.menshen.plist).
 
 ```bash
 # Install the service
-cp configs/net.liujiacai.ai-menshen.plist ~/Library/LaunchAgents/
+cp configs/net.liujiacai.menshen.plist ~/Library/LaunchAgents/
 
 # Load and start
-launchctl load ~/Library/LaunchAgents/net.liujiacai.ai-menshen.plist
+launchctl load ~/Library/LaunchAgents/net.liujiacai.menshen.plist
 
 # Stop and unload
-launchctl unload ~/Library/LaunchAgents/net.liujiacai.ai-menshen.plist
+launchctl unload ~/Library/LaunchAgents/net.liujiacai.menshen.plist
 
 # Check status
-launchctl list | grep ai-menshen
+launchctl list | grep menshen
 
 # View logs
-tail -f /tmp/ai-menshen-stderr.log
+tail -f /tmp/menshen.log
 ```
 
-The service starts automatically on login and restarts on crash. It expects the binary at `~/.local/bin/ai-menshen` and config at `~/.config/ai-menshen/config.toml`.
+The service starts automatically on login and restarts on crash. It expects the binary at `~/.local/bin/menshen` and config at `~/.config/menshen/config.toml`.
 
 ### Linux
 
-A systemd unit file is provided at [`configs/ai-menshen.service`](configs/ai-menshen.service).
+A systemd unit file is provided at [`configs/menshen.service`](configs/menshen.service).
 
 ```bash
 # Install the service
-sudo cp configs/ai-menshen.service /etc/systemd/system/
+sudo cp configs/menshen.service /etc/systemd/system/
 
 # Edit the service file to match your setup (User, ExecStart, config path)
-sudo systemctl edit --full ai-menshen
+sudo systemctl edit --full menshen
 
 # Enable (start at boot) and start immediately
-sudo systemctl enable --now ai-menshen
+sudo systemctl enable --now menshen
 
 # Restart after config change
-sudo systemctl restart ai-menshen
+sudo systemctl restart menshen
 
 # Check status
-systemctl status ai-menshen
+systemctl status menshen
 
 # View logs
-journalctl -u ai-menshen -f
+journalctl -u menshen -f
 
 # Stop and disable
-sudo systemctl disable --now ai-menshen
+sudo systemctl disable --now menshen
 ```
 
 The service restarts on failure. Edit the unit file to set your username, binary path, and config path.
@@ -203,16 +235,17 @@ Customize `config.toml` (template: [configs/example.toml](configs/example.toml))
 | **Auth** | `enable` | Enable authentication for gateway & dashboard | `false` |
 | | `user` | Username for **Dashboard** (Basic Auth) | - |
 | | `password` | Password for **Dashboard** (Basic Auth) | - |
-| | `token` | Token for **API Requests** (Bearer Auth) | - |
+| | `token` | Token for **API Requests** (`Authorization: Bearer` or `x-api-key`) | - |
 | **Providers** | *(table key)* | Provider name (`[providers.<name>]`); must match `[A-Za-z0-9_-]+`, used in logs & audit DB | - |
 | | `base_url` | Upstream endpoint (Required) | - |
 | | `api_key` | Upstream key | - |
 | | `headers` | Custom headers (e.g., `{ "cf-aig-authorization" = "Bearer..." }`) | `{}` |
 | | `model` | Force override request model | - |
 | | `weight` | Weighted request share (`0` disables the provider; startup fails if all are `0`) | `0` |
+| | `capabilities` | Supported protocol capabilities: `"openai-completions"`, `"anthropic-messages"` | `["openai-completions"]` |
 | **Upstream** | `timeout` | Upstream request timeout (seconds) | `300` (5 min) |
 | **Storage** | `retention_days` | Automatically purge logs older than X days | `90` |
-| **Storage.SQLite** | `path` | SQLite database location | `./data/ai-menshen.db` |
+| **Storage.SQLite** | `path` | SQLite database location | `./data/menshen.db` |
 | **Failover** | `enable` | Auto-retry with next provider on failure | `true` |
 | **Cache** | `enable` | Cache 200 responses | `true` |
 | | `max_body_bytes` | Skip caching responses larger than this size (0 = no limit) | `5242880` (5 MiB) |
@@ -240,21 +273,49 @@ Example:
 base_url = "https://api.openai.com/v1"
 api_key = "${OPENAI_API_KEY}"
 weight = 8
+capabilities = ["openai-completions"]
 
 [providers.deepseek]
 base_url = "https://api.deepseek.com"
 api_key = "${DEEPSEEK_API_KEY}"
 weight = 2
+capabilities = ["openai-completions"]
+
+# Native Anthropic Claude provider
+[providers.claude]
+base_url = "https://api.anthropic.com/v1"
+api_key = "${ANTHROPIC_API_KEY}"
+weight = 1
+capabilities = ["anthropic-messages"]
 ```
 
-In this example, requests will trend toward an `80% / 20%` split over time. The selection is probabilistic per request, so short runs may vary.
+In this example, requests to `/chat/completions` will trend toward an `80% / 20%` split between `openai` and `deepseek`. Requests to `/messages` will automatically route to `claude`.
 
-### Explicit Provider Selection
+## Protocol Capabilities & Routing
 
+menshen natively supports multiple LLM API protocols seamlessly on a single gateway instance:
+- **`openai-completions`**: OpenAI Chat Completions and Responses (`/chat/completions`, `/v1/chat/completions`, `/responses`, `/v1/responses`).
+- **`anthropic-messages`**: Anthropic Messages (`/messages`, `/v1/messages`).
+
+### Automatic Capability Routing
+When a client sends a request without explicit provider pinning:
+- Requests to `/chat/completions` or `/v1/chat/completions` are automatically load-balanced across active providers declaring `openai-completions`.
+- Requests to `/messages` or `/v1/messages` are automatically load-balanced across active providers declaring `anthropic-messages`.
+- Multi-capability providers (like OpenRouter or Cloudflare AI Gateway) can declare both: `capabilities = ["openai-completions", "anthropic-messages"]`.
+- Automatic failover stays strictly within providers supporting the matched capability.
+
+### Explicit Provider Selection & Capability Checking
 You can explicitly route a request to a specific provider by using the `/provider/<name>` URL path prefix:
 
 ```bash
-# REST API
+# REST API (Anthropic Messages to Claude provider)
+curl "http://localhost:8080/provider/claude/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-auth-token" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model": "claude-3-5-sonnet-20241022", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello!"}]}'
+
+# REST API (OpenAI Chat Completions to DeepSeek provider)
 curl "http://localhost:8080/provider/deepseek/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model": "deepseek-chat", "messages": [{"role": "user", "content": "Hello!"}]}'
@@ -271,14 +332,15 @@ client = OpenAI(
 - **Direct Routing**: Weighted random selection is bypassed and the specified provider is selected directly. Even providers configured with `weight = 0` can be targeted explicitly.
 - **Failover Behavior**: Automatic failover is disabled when a provider is explicitly chosen, ensuring that upstream errors are returned directly to the client without unexpected redirection.
 - **Transparent Forwarding**: The `/provider/<name>` prefix is automatically stripped before forwarding to upstream endpoints.
-- **Validation**: If the requested provider does not exist in the configuration, `ai-menshen` immediately returns HTTP `400 Bad Request`.
+- **Capability Validation**: If the requested provider does not support the capability required by the endpoint (e.g. sending `/provider/openai/v1/messages`), `menshen` returns HTTP `400 Bad Request` on cache miss.
+- **Provider-Agnostic Caching**: Identical requests share the same cache entry across providers. A response cached from Claude can be served directly with `X-Cache: HIT` (costing 0 upstream tokens) even if another client queries with explicit `/provider/openai` pinning.
 
 ## Failover
 
 When `failover.enable = true` (the default), a failed request is automatically retried against the remaining providers:
 
 - **Triggers**: network errors, HTTP 5xx, or 429 (Too Many Requests).
-- **Order**: the first provider is chosen by weighted random; on failure, the remaining providers are tried from the heaviest to the lightest (ties broken by name, so the order is deterministic).
+- **Capability-Gated Order**: failover retries strictly against the remaining active providers that support the same capability, ordered from heaviest to lightest weight.
 - **Streaming**: failover only happens before any data has been sent to the client. Once SSE chunks are flowing, the stream is not retried.
 - **Passthrough**: non-auditable paths (e.g., `/models`) use a single provider and do not failover.
 - **Graceful degradation**: if every provider fails, the last upstream response (including its original status code and body) is passed through to the client rather than being replaced with a generic 502.

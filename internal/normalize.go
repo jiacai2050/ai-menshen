@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import (
 	"bytes"
@@ -26,11 +26,12 @@ type requestFields struct {
 	raw    map[string][]byte
 }
 
-// AnalyzeRequest inspects a request body and only rewrites it when a provider
-// model override or injected stream options require it. Rewrites splice the
-// raw bytes of untouched top-level fields, so large payloads (messages, tools)
-// are never re-encoded.
-func AnalyzeRequest(path string, body []byte, provider ProviderConfig, cacheEnabled bool) (RequestMeta, error) {
+type analyzeOptions struct {
+	injectStreamOptions bool
+	excludeCacheField   func(key string, value any) bool
+}
+
+func analyzeRequestCommon(path string, body []byte, provider ProviderConfig, cacheEnabled bool, opts analyzeOptions) (RequestMeta, error) {
 	meta := RequestMeta{
 		EffectiveBody: body,
 	}
@@ -71,7 +72,7 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig, cacheEnab
 		meta.Stream = stream
 	}
 
-	if meta.Stream {
+	if meta.Stream && opts.injectStreamOptions {
 		if _, exists := fields.values["stream_options"]; !exists {
 			patch("stream_options", map[string]any{"include_usage": true}, []byte(`{"include_usage":true}`))
 		}
@@ -86,7 +87,7 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig, cacheEnab
 	}
 
 	if cacheEnabled {
-		cacheKey, err := buildCacheKey(path, fields.values)
+		cacheKey, err := buildCacheKeyWithFilter(path, fields.values, opts.excludeCacheField)
 		if err != nil {
 			return meta, fmt.Errorf("build cache key: %w", err)
 		}
@@ -94,6 +95,24 @@ func AnalyzeRequest(path string, body []byte, provider ProviderConfig, cacheEnab
 	}
 
 	return meta, nil
+}
+
+// AnalyzeRequest inspects a request body and only rewrites it when a provider
+// model override or injected stream options require it.
+func AnalyzeRequest(path string, body []byte, provider ProviderConfig, cacheEnabled bool) (RequestMeta, error) {
+	return analyzeRequestCommon(path, body, provider, cacheEnabled, analyzeOptions{
+		injectStreamOptions: true,
+		excludeCacheField:   shouldExcludeCacheField,
+	})
+}
+
+// AnalyzeAnthropicRequest inspects an Anthropic request body, applying model overrides
+// and computing cache keys without injecting stream options.
+func AnalyzeAnthropicRequest(path string, body []byte, provider ProviderConfig, cacheEnabled bool) (RequestMeta, error) {
+	return analyzeRequestCommon(path, body, provider, cacheEnabled, analyzeOptions{
+		injectStreamOptions: false,
+		excludeCacheField:   shouldExcludeAnthropicCacheField,
+	})
 }
 
 // decodeJSONObject decodes the top level of a JSON object in a single pass,
@@ -178,7 +197,13 @@ func buildEffectiveBody(fields requestFields, overrides map[string][]byte) ([]by
 
 const cacheVersion = "v1"
 
+// buildCacheKey is exposed for unit tests (e.g. normalize_test.go). In runtime proxying,
+// cache keys are built via analyzeRequestCommon / PrepareBody.
 func buildCacheKey(path string, payload map[string]any) (string, error) {
+	return buildCacheKeyWithFilter(path, payload, shouldExcludeCacheField)
+}
+
+func buildCacheKeyWithFilter(path string, payload map[string]any, excludeFn func(key string, value any) bool) (string, error) {
 	buf := bufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufferPool.Put(buf)
@@ -194,7 +219,7 @@ func buildCacheKey(path string, payload map[string]any) (string, error) {
 	}
 	written := 0
 	for _, key := range sortedKeys(payload) {
-		if shouldExcludeCacheField(key, payload[key]) {
+		if excludeFn(key, payload[key]) {
 			continue
 		}
 		if written > 0 {
@@ -309,6 +334,18 @@ func encodeString(w io.Writer, s string) error {
 func shouldExcludeCacheField(key string, value any) bool {
 	switch key {
 	case "user", "stream_options":
+		return true
+	case "stream":
+		stream, ok := value.(bool)
+		return ok && !stream
+	default:
+		return false
+	}
+}
+
+func shouldExcludeAnthropicCacheField(key string, value any) bool {
+	switch key {
+	case "metadata":
 		return true
 	case "stream":
 		stream, ok := value.(bool)

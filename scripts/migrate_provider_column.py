@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add the request_logs.provider column to a database created by ai-menshen v1.3.x or earlier.
+"""Add the request_logs.provider column to a database created by menshen v1.3.x or earlier.
 
 Idempotent: safe to run more than once.
 

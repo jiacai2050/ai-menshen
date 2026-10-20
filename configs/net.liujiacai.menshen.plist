@@ -3,20 +3,20 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>net.liujiacai.ai-menshen</string>
+    <string>net.liujiacai.menshen</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>exec "$HOME/.local/bin/ai-menshen" -config "$HOME/.config/ai-menshen/config.toml"</string>
+        <string>exec "$HOME/.local/bin/menshen" -config "$HOME/.config/menshen/config.toml"</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/ai-menshen.log</string>
+    <string>/tmp/menshen.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/ai-menshen.log</string>
+    <string>/tmp/menshen.log</string>
 </dict>
 </plist>

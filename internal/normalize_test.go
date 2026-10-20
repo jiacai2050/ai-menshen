@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import (
 	"encoding/json"

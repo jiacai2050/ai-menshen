@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import (
 	"strings"
@@ -40,7 +40,7 @@ func BenchmarkExtractUsageNoUsage(b *testing.B) {
 
 func BenchmarkSSEExtractorStream(b *testing.B) {
 	for b.Loop() {
-		e := NewSSEUsageExtractor("req-bench")
+		e := (&OpenAIProtocol{}).NewStreamAuditor("req-bench")
 		for i := 0; i < 100; i++ {
 			if err := e.Write(benchSSELine); err != nil {
 				b.Fatal(err)

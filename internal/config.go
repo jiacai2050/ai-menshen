@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import (
 	"flag"
@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -46,13 +47,21 @@ type AuthConfig struct {
 var providerNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type ProviderConfig struct {
-	Name    string            `toml:"-"` // set from the providers table key at load time
-	BaseURL string            `toml:"base_url"`
-	APIKey  string            `toml:"api_key"`
-	Headers map[string]string `toml:"headers"`
-	Model   string            `toml:"model"`
-	Weight  int               `toml:"weight"`
-	Proxy   string            `toml:"proxy"`
+	Name         string            `toml:"-"` // set from the providers table key at load time
+	BaseURL      string            `toml:"base_url"`
+	APIKey       string            `toml:"api_key"`
+	Headers      map[string]string `toml:"headers"`
+	Model        string            `toml:"model"`
+	Weight       int               `toml:"weight"`
+	Proxy        string            `toml:"proxy"`
+	Capabilities []string          `toml:"capabilities"`
+}
+
+func (p ProviderConfig) HasCapability(capName string) bool {
+	if len(p.Capabilities) == 0 {
+		return capName == CapOpenAICompletions
+	}
+	return slices.Contains(p.Capabilities, capName)
 }
 
 type UpstreamConfig struct {
@@ -121,7 +130,7 @@ func LoadConfig(path string) (Config, error) {
 		},
 		Storage: StorageConfig{
 			SQLite: SQLiteConfig{
-				Path: "./data/ai-menshen.db",
+				Path: "./data/menshen.db",
 			},
 			RetentionDays: 90,
 		},
@@ -214,6 +223,16 @@ func LoadConfig(path string) (Config, error) {
 		}
 		if provider.Weight > 0 {
 			hasPositiveWeight = true
+		}
+
+		if len(provider.Capabilities) == 0 {
+			provider.Capabilities = []string{CapOpenAICompletions}
+		} else {
+			for _, capName := range provider.Capabilities {
+				if capName != CapOpenAICompletions && capName != CapAnthropicMessages {
+					return cfg, fmt.Errorf("config.providers.%s.capabilities: unknown capability %q", name, capName)
+				}
+			}
 		}
 
 		cfg.Providers[name] = provider

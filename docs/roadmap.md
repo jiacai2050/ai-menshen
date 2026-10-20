@@ -1,6 +1,6 @@
 # Future Plans & Ideas
 
-This document outlines potential features and improvements for **ai-menshen**.
+This document outlines potential features and improvements for **menshen**.
 
 ## 1. Reliability: Multi-Provider Failover
 - **Current State**: Requests can already be distributed across multiple providers by weight.

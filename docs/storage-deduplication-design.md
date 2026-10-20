@@ -1,6 +1,6 @@
 # Storage Deduplication & Blob Separation Design
 
-This document outlines the architecture for optimizing SQLite storage in **ai-menshen** by separating large text blobs from metadata and deduplicating them using content hashing and **Reference Counting**.
+This document outlines the architecture for optimizing SQLite storage in **menshen** by separating large text blobs from metadata and deduplicating them using content hashing and **Reference Counting**.
 
 ## 1. Motivation
 In an AI proxy, the same Large Language Model (LLM) responses are often repeated (Cache Hits). Storing these multi-kilobyte strings for every single request leads to disk bloat and slow metadata queries.

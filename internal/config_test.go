@@ -1,4 +1,4 @@
-package aimenshen
+package menshen
 
 import (
 	"os"
@@ -124,6 +124,60 @@ path = "./test.db"
 `))
 	if err == nil {
 		t.Fatalf("LoadConfig() error = nil, want duplicate provider name rejection")
+	}
+}
+
+func TestLoadConfigCapabilitiesDefaultAndValidation(t *testing.T) {
+	// 1. Default to openai-completions
+	cfg := loadTestConfig(t, `
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key = "sk-test"
+weight = 1
+
+[storage.sqlite]
+path = "./test.db"
+`)
+	provider := cfg.Providers["openai"]
+	if len(provider.Capabilities) != 1 || provider.Capabilities[0] != CapOpenAICompletions {
+		t.Fatalf("Capabilities want [%s], got %v", CapOpenAICompletions, provider.Capabilities)
+	}
+
+	// 2. Explicit capabilities
+	cfg2 := loadTestConfig(t, `
+[providers.claude]
+base_url = "https://api.anthropic.com/v1"
+api_key = "sk-test"
+weight = 1
+capabilities = ["anthropic-messages"]
+
+[storage.sqlite]
+path = "./test.db"
+`)
+	provider2 := cfg2.Providers["claude"]
+	if len(provider2.Capabilities) != 1 || provider2.Capabilities[0] != CapAnthropicMessages {
+		t.Fatalf("Capabilities want [%s], got %v", CapAnthropicMessages, provider2.Capabilities)
+	}
+	if !provider2.HasCapability(CapAnthropicMessages) {
+		t.Error("expected HasCapability(CapAnthropicMessages) = true")
+	}
+	if provider2.HasCapability(CapOpenAICompletions) {
+		t.Error("expected HasCapability(CapOpenAICompletions) = false")
+	}
+
+	// 3. Reject unknown capability
+	_, err := LoadConfig(writeTestConfig(t, `
+[providers.bad]
+base_url = "https://api.example.com"
+api_key = "sk-test"
+weight = 1
+capabilities = ["unsupported-cap"]
+
+[storage.sqlite]
+path = "./test.db"
+`))
+	if err == nil || !strings.Contains(err.Error(), "unknown capability") {
+		t.Fatalf("LoadConfig() error = %v, want unknown capability error", err)
 	}
 }
 

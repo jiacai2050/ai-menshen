@@ -9,7 +9,10 @@ enable = false
 # Used for browser-based Dashboard access (User:Password)
 user = "admin"
 password = "your-password-here"  # supports ${ENV}
-# Used for API proxying (Authorization: Bearer <token>)
+# Used for API proxying (Authorization: Bearer <token> or x-api-key: <token>)
+# Note: When auth is enabled, incoming auth headers matching the gateway token are
+# consumed by the gateway and stripped before forwarding to upstreams. If upstreams
+# require credentials, configure them in [providers.<name>].api_key / headers.
 token = "sk-your-proxy-token"  # supports ${ENV}
 
 # Providers are keyed by name: [providers.<name>]. The name is used in logs
@@ -22,6 +25,9 @@ api_key = "${OPENAI_API_KEY}"  # supports ${ENV}
 # model = "gpt-4.1"
 # Request distribution weight (set to 0 to disable this provider)
 weight = 1
+# Optional: protocol capabilities supported by this provider (default: ["openai-completions"])
+# Supported: "openai-completions", "anthropic-messages"
+# capabilities = ["openai-completions"]
 # Optional: HTTP/SOCKS5 proxy for this provider (empty = use HTTP_PROXY/HTTPS_PROXY env vars)
 # proxy = "http://127.0.0.1:7890"  # supports ${ENV}
 # Optional: custom headers (useful for Cloudflare AI Gateway BYOK)
@@ -33,6 +39,13 @@ weight = 1
 # base_url = "https://api.deepseek.com"
 # api_key = "${DEEPSEEK_API_KEY}"
 # weight = 2
+
+# Native Anthropic Claude provider
+# [providers.claude]
+# base_url = "https://api.anthropic.com/v1"
+# api_key = "${ANTHROPIC_API_KEY}"
+# capabilities = ["anthropic-messages"]
+# weight = 1
 
 [upstream]
 # Upstream request timeout in seconds (default: 300)

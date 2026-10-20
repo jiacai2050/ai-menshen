@@ -1,9 +1,10 @@
-package aimenshen
+package menshen
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -53,6 +54,56 @@ func TestNewGatewayPrecomputesActiveProviders(t *testing.T) {
 	}
 	if got := gateway.activeTotalWeight; got != 5 {
 		t.Fatalf("activeTotalWeight = %d, want 5", got)
+	}
+}
+
+func TestPickProviderForCapabilityWeightDistribution(t *testing.T) {
+	gateway, err := NewGateway(Config{
+		Providers: map[string]ProviderConfig{
+			"heavy": {
+				Name:         "heavy",
+				BaseURL:      "https://heavy.example",
+				Weight:       3,
+				Capabilities: []string{CapOpenAICompletions},
+			},
+			"light": {
+				Name:         "light",
+				BaseURL:      "https://light.example",
+				Weight:       1,
+				Capabilities: []string{CapOpenAICompletions},
+			},
+			"other": {
+				Name:         "other",
+				BaseURL:      "https://other.example",
+				Weight:       10,
+				Capabilities: []string{CapAnthropicMessages},
+			},
+		},
+		Upstream: UpstreamConfig{Timeout: 1},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	counts := make(map[string]int)
+	const iterations = 2000
+	for i := 0; i < iterations; i++ {
+		p, err := gateway.pickProviderForCapability(CapOpenAICompletions)
+		if err != nil {
+			t.Fatalf("pickProviderForCapability failed: %v", err)
+		}
+		counts[p.Name]++
+	}
+
+	if counts["other"] != 0 {
+		t.Errorf("provider 'other' was picked %d times, want 0", counts["other"])
+	}
+	// heavy should be ~75% (1500), light should be ~25% (500). Allow safe margin [1200, 1800].
+	if counts["heavy"] < 1200 || counts["heavy"] > 1800 {
+		t.Errorf("heavy picked %d times, expected roughly ~1500 (75%%)", counts["heavy"])
+	}
+	if counts["light"] < 200 || counts["light"] > 800 {
+		t.Errorf("light picked %d times, expected roughly ~500 (25%%)", counts["light"])
 	}
 }
 
@@ -467,11 +518,11 @@ func TestResolveProvider(t *testing.T) {
 		t.Fatalf("NewGateway() error = %v", err)
 	}
 
-	// 1. Unspecified: uses pickProvider and leaves the path alone
+	// 1. Unspecified: leaves path alone and explicit=false (deferred to capability-based picking)
 	req := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
 	p, path, explicit, err := gateway.resolveProvider(req.URL.Path)
-	if err != nil || explicit || p.Name != "primary" || path != "/chat/completions" {
-		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want primary, explicit=false, path=/chat/completions", p, path, explicit, err)
+	if err != nil || explicit || path != "/chat/completions" {
+		t.Fatalf("resolveProvider() = (%+v, %q, %v, %v), want explicit=false, path=/chat/completions", p, path, explicit, err)
 	}
 
 	// 2. Explicit active provider via /provider/ prefix
@@ -1009,5 +1060,547 @@ func TestServeAPIHTTPFailoverShortCircuitsOnClientContextCanceled(t *testing.T) 
 
 	if atomic.LoadInt32(&secondaryHits) > 0 {
 		t.Errorf("secondary provider was hit %d times, want 0 when client context is canceled", secondaryHits)
+	}
+}
+
+func TestV1ChatCompletionsAuditingAndRouting(t *testing.T) {
+	var openaiHits int32
+	serverOpenAI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&openaiHits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-v1",
+			"object": "chat.completion",
+			"created": 1677652288,
+			"model": "gpt-4o",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}}],
+			"usage": {
+				"prompt_tokens": 15,
+				"completion_tokens": 25,
+				"total_tokens": 40
+			}
+		}`))
+	}))
+	defer serverOpenAI.Close()
+
+	var claudeHits int32
+	serverClaude := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&claudeHits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer serverClaude.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "v1_chat_audit_test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage() error = %v", err)
+	}
+	defer storage.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"openai": {
+				Name:         "openai",
+				BaseURL:      serverOpenAI.URL,
+				Weight:       1,
+				Capabilities: []string{CapOpenAICompletions},
+			},
+			"claude": {
+				Name:         "claude",
+				BaseURL:      serverClaude.URL,
+				Weight:       1,
+				Capabilities: []string{CapAnthropicMessages},
+			},
+		},
+		Storage: StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway() error = %v", err)
+	}
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if atomic.LoadInt32(&openaiHits) != 1 {
+		t.Errorf("openai hits = %d, want 1", openaiHits)
+	}
+	if atomic.LoadInt32(&claudeHits) != 0 {
+		t.Errorf("claude hits = %d, want 0", claudeHits)
+	}
+
+	// Verify asynchronous audit persistence
+	var summary *UsageSummary
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s, err := storage.UsageSummary(1)
+		if err == nil && s != nil && s.TotalTokens > 0 {
+			summary = s
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if summary == nil {
+		t.Fatal("expected usage summary persisted for /v1/chat/completions")
+	}
+	if summary.PromptTokens != 15 {
+		t.Errorf("prompt tokens = %d, want 15", summary.PromptTokens)
+	}
+	if summary.CompletionTokens != 25 {
+		t.Errorf("completion tokens = %d, want 25", summary.CompletionTokens)
+	}
+	if summary.TotalTokens != 40 {
+		t.Errorf("total tokens = %d, want 40", summary.TotalTokens)
+	}
+
+	logs, err := storage.RequestLogs(1, 10)
+	if err != nil || len(logs) == 0 {
+		t.Fatalf("expected request logs, got err=%v len=%d", err, len(logs))
+	}
+	if logs[0].Path != "/v1/chat/completions" {
+		t.Errorf("logged path = %q, want /v1/chat/completions", logs[0].Path)
+	}
+}
+
+func TestGatewayAuthTokenNotLeakedUpstream(t *testing.T) {
+	var capturedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		Auth: AuthConfig{
+			Enable: true,
+			Token:  "gateway-secret-token",
+		},
+		Providers: map[string]ProviderConfig{
+			"unauthenticated": {
+				Name:    "unauthenticated",
+				BaseURL: server.URL,
+				APIKey:  "", // Provider has no API key configured
+				Weight:  1,
+			},
+		},
+	}
+
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway failed: %v", err)
+	}
+
+	// 1. Auditable path (/chat/completions)
+	req1 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+	req1.Header.Set("Authorization", "Bearer gateway-secret-token")
+	rec1 := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("req1 failed: %d", rec1.Code)
+	}
+	if capturedAuth != "" {
+		t.Errorf("capturedAuth = %q, want empty (gateway auth token must not leak upstream)", capturedAuth)
+	}
+
+	// 2. Passthrough path (/models)
+	req2 := httptest.NewRequest(http.MethodGet, "/models", nil)
+	req2.Header.Set("Authorization", "Bearer gateway-secret-token")
+	rec2 := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("req2 failed: %d", rec2.Code)
+	}
+	if capturedAuth != "" {
+		t.Errorf("capturedAuth = %q, want empty (gateway auth token must not leak upstream in passthrough)", capturedAuth)
+	}
+}
+
+func TestTransparentOpenAIProxyWhenNoAPIKey(t *testing.T) {
+	var capturedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"direct-openai": {
+				Name:         "direct-openai",
+				BaseURL:      server.URL,
+				APIKey:       "", // BYOK: client supplies their own key
+				Weight:       1,
+				Capabilities: []string{CapOpenAICompletions},
+			},
+		},
+	}
+
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer client-custom-openai-key")
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request failed: %d", rec.Code)
+	}
+	if capturedAuth != "Bearer client-custom-openai-key" {
+		t.Errorf("capturedAuth = %q, want 'Bearer client-custom-openai-key'", capturedAuth)
+	}
+}
+
+func TestGatewayAuthWithAnthropicApiKeyHeader(t *testing.T) {
+	var capturedAuth string
+	var capturedApiKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		capturedApiKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		Auth: AuthConfig{
+			Enable: true,
+			Token:  "gateway-secret-token",
+		},
+		Providers: map[string]ProviderConfig{
+			"claude": {
+				Name:         "claude",
+				BaseURL:      server.URL,
+				APIKey:       "sk-ant-real-upstream-key",
+				Weight:       1,
+				Capabilities: []string{CapAnthropicMessages},
+			},
+		},
+	}
+
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway failed: %v", err)
+	}
+
+	// 1. Success via x-api-key authentication matching gateway token
+	req := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[]}`))
+	req.Header.Set("x-api-key", "gateway-secret-token")
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+	if capturedApiKey != "sk-ant-real-upstream-key" {
+		t.Errorf("capturedApiKey = %q, want upstream provider key", capturedApiKey)
+	}
+	if capturedAuth != "" {
+		t.Errorf("capturedAuth = %q, want empty (Authorization must be cleared for Anthropic)", capturedAuth)
+	}
+
+	// 2. Reject when x-api-key is wrong and Authorization is absent
+	reqWrong := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[]}`))
+	reqWrong.Header.Set("x-api-key", "wrong-token")
+	recWrong := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(recWrong, reqWrong)
+	if recWrong.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized, got %d", recWrong.Code)
+	}
+}
+
+func TestGatewayAuthAnthropicTokenNotLeakedWhenNoAPIKey(t *testing.T) {
+	var capturedApiKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedApiKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		Auth: AuthConfig{
+			Enable: true,
+			Token:  "gateway-secret-token",
+		},
+		Providers: map[string]ProviderConfig{
+			"claude-empty": {
+				Name:         "claude-empty",
+				BaseURL:      server.URL,
+				APIKey:       "", // No key configured
+				Weight:       1,
+				Capabilities: []string{CapAnthropicMessages},
+			},
+		},
+	}
+
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[]}`))
+	req.Header.Set("x-api-key", "gateway-secret-token")
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rec.Code)
+	}
+	if capturedApiKey != "" {
+		t.Errorf("capturedApiKey = %q, want empty (gateway token must not leak to upstream)", capturedApiKey)
+	}
+}
+
+func TestTransparentAnthropicProxyWhenNoAPIKey(t *testing.T) {
+	var capturedKey string
+	var capturedVersion string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedKey = r.Header.Get("x-api-key")
+		capturedVersion = r.Header.Get("anthropic-version")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		Providers: map[string]ProviderConfig{
+			"claude-byok": {
+				Name:         "claude-byok",
+				BaseURL:      server.URL,
+				APIKey:       "",
+				Weight:       1,
+				Capabilities: []string{CapAnthropicMessages},
+			},
+		},
+	}
+
+	gateway, err := NewGateway(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewGateway failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[]}`))
+	req.Header.Set("x-api-key", "sk-ant-client-custom-key")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	rec := httptest.NewRecorder()
+
+	gateway.ServeAPIHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request failed: %d", rec.Code)
+	}
+	if capturedKey != "sk-ant-client-custom-key" {
+		t.Errorf("capturedKey = %q, want 'sk-ant-client-custom-key'", capturedKey)
+	}
+	if capturedVersion != "2023-06-01" {
+		t.Errorf("capturedVersion = %q, want '2023-06-01'", capturedVersion)
+	}
+}
+
+func TestStreamingProxyDoesNotCacheWhenExceedingMaxBodyBytes(t *testing.T) {
+	for _, logResp := range []bool{false, true} {
+		t.Run(fmt.Sprintf("LogResponseBody_%v", logResp), func(t *testing.T) {
+			var upstreamHits int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&upstreamHits, 1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				flusher, _ := w.(http.Flusher)
+
+				chunks := []string{
+					"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
+					"data: {\"choices\":[{\"delta\":{\"content\":\" world!\"}}]}\n\n",
+					"data: [DONE]\n\n",
+				}
+				for _, c := range chunks {
+					_, _ = io.WriteString(w, c)
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+			}))
+			defer server.Close()
+
+			dbPath := filepath.Join(t.TempDir(), "stream_limit_test.db")
+			storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+			if err != nil {
+				t.Fatalf("OpenStorage failed: %v", err)
+			}
+			defer storage.Close()
+
+			// MaxBodyBytes = 30 is smaller than the full stream (~100 bytes)
+			cfg := Config{
+				Logging: LoggingConfig{
+					LogResponseBody: logResp,
+				},
+				Providers: map[string]ProviderConfig{
+					"openai": {
+						Name:         "openai",
+						BaseURL:      server.URL,
+						Weight:       1,
+						Capabilities: []string{CapOpenAICompletions},
+					},
+				},
+				Cache: CacheConfig{
+					Enable:       true,
+					MaxBodyBytes: 30,
+				},
+				Storage: StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+			}
+
+			gateway, err := NewGateway(cfg, storage)
+			if err != nil {
+				t.Fatalf("NewGateway failed: %v", err)
+			}
+
+			body := `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+
+			// 1. First streaming request
+			req1 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body))
+			rec1 := httptest.NewRecorder()
+			gateway.ServeAPIHTTP(rec1, req1)
+
+			if rec1.Code != http.StatusOK {
+				t.Fatalf("req1 failed: %d", rec1.Code)
+			}
+			if !strings.Contains(rec1.Body.String(), "world!") {
+				t.Errorf("client must receive full forwarded stream, got: %s", rec1.Body.String())
+			}
+
+			// Wait for worker goroutine to process exchange
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				logs, _ := storage.RequestLogs(1, 10)
+				if len(logs) > 0 {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			// 2. Second request should NOT hit cache because response exceeded MaxBodyBytes
+			req2 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body))
+			rec2 := httptest.NewRecorder()
+			gateway.ServeAPIHTTP(rec2, req2)
+
+			if rec2.Code != http.StatusOK {
+				t.Fatalf("req2 failed: %d", rec2.Code)
+			}
+			if rec2.Header().Get("X-Cache") == "HIT" {
+				t.Error("expected cache miss when stream response exceeds MaxBodyBytes, but got X-Cache: HIT")
+			}
+			if atomic.LoadInt32(&upstreamHits) != 2 {
+				t.Errorf("upstreamHits = %d, want 2 (stream must not be cached)", upstreamHits)
+			}
+		})
+	}
+}
+
+func TestIncompleteStreamNotCachedWithDefaultLogging(t *testing.T) {
+	var upstreamHits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&upstreamHits, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+
+		// Upstream stream ends cleanly with EOF but WITHOUT the terminal [DONE] marker!
+		chunks := []string{
+			"data: {\"choices\":[{\"delta\":{\"content\":\"hello truncated\"}}]}\n\n",
+		}
+		for _, c := range chunks {
+			_, _ = io.WriteString(w, c)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "incomplete_stream_test.db")
+	storage, err := OpenStorage(StorageConfig{SQLite: SQLiteConfig{Path: dbPath}})
+	if err != nil {
+		t.Fatalf("OpenStorage failed: %v", err)
+	}
+	defer storage.Close()
+
+	// Default logging has LogResponseBody = true
+	cfg := Config{
+		Logging: LoggingConfig{
+			LogResponseBody: true,
+		},
+		Providers: map[string]ProviderConfig{
+			"openai": {
+				Name:         "openai",
+				BaseURL:      server.URL,
+				Weight:       1,
+				Capabilities: []string{CapOpenAICompletions},
+			},
+		},
+		Cache: CacheConfig{
+			Enable: true,
+		},
+		Storage: StorageConfig{SQLite: SQLiteConfig{Path: dbPath}},
+	}
+
+	gateway, err := NewGateway(cfg, storage)
+	if err != nil {
+		t.Fatalf("NewGateway failed: %v", err)
+	}
+
+	body := `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+
+	// 1. First streaming request
+	req1 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body))
+	rec1 := httptest.NewRecorder()
+	gateway.ServeAPIHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("req1 failed: %d", rec1.Code)
+	}
+
+	// Wait for worker goroutine to process exchange
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		logs, _ := storage.RequestLogs(1, 10)
+		if len(logs) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2. Second request: even with LogResponseBody=true, incomplete stream must NOT hit cache!
+	req2 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body))
+	rec2 := httptest.NewRecorder()
+	gateway.ServeAPIHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("req2 failed: %d", rec2.Code)
+	}
+	if rec2.Header().Get("X-Cache") == "HIT" {
+		t.Error("expected cache miss for incomplete stream even when LogResponseBody=true, but got X-Cache: HIT")
+	}
+	if atomic.LoadInt32(&upstreamHits) != 2 {
+		t.Errorf("upstreamHits = %d, want 2 (incomplete stream must not be cached)", upstreamHits)
 	}
 }

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b1110">
-  <meta name="description" content="ai-menshen is a local-first OpenAI-compatible AI gateway for auth injection, provider failover, usage auditing, and response caching.">
-  <title>ai-menshen — Your AI traffic, under your control</title>
+  <meta name="description" content="menshen is a local-first OpenAI and Anthropic compatible AI gateway for auth injection, provider failover, usage auditing, and response caching.">
+  <title>menshen — Your AI traffic, under your control</title>
   <style>
     :root {
       --bg: #0b1110;
@@ -138,24 +138,24 @@
   <header class="wrap nav">
     <a class="brand" href="#">
       <span class="brand-mark">门</span>
-      <span>ai-menshen<small>local-first AI gateway</small></span>
+      <span>menshen<small>local-first AI gateway</small></span>
     </a>
     <nav class="links" aria-label="Main navigation">
       <a href="#features">Features</a>
       <a href="#how-it-works">How it works</a>
       <a href="#dashboard">Dashboard</a>
-      <a class="github" href="https://github.com/jiacai2050/ai-menshen">View on GitHub&nbsp; ↗</a>
+      <a class="github" href="https://github.com/jiacai2050/menshen">View on GitHub&nbsp; ↗</a>
     </nav>
   </header>
 
   <main>
     <section class="wrap hero">
-      <div class="eyebrow"><i></i> OpenAI-compatible. Local-first.</div>
+      <div class="eyebrow"><i></i> OpenAI & Anthropic compatible. Local-first.</div>
       <h1>Your AI traffic,<br><em>under your control.</em></h1>
-      <p>ai-menshen is a lightweight gateway that puts auth, routing, failover, usage intelligence, and caching between your clients and any OpenAI-compatible provider.</p>
+      <p>menshen is a lightweight gateway that puts auth, routing, failover, usage intelligence, and caching between your clients and any OpenAI or Anthropic compatible provider.</p>
       <div class="actions">
-        <a class="button primary" href="https://github.com/jiacai2050/ai-menshen#installation">Get started <span>→</span></a>
-        <a class="button secondary" href="https://github.com/jiacai2050/ai-menshen">Read the source <span>↗</span></a>
+        <a class="button primary" href="https://github.com/jiacai2050/menshen#installation">Get started <span>→</span></a>
+        <a class="button secondary" href="https://github.com/jiacai2050/menshen">Read the source <span>↗</span></a>
       </div>
     </section>
 
@@ -200,7 +200,7 @@
         <div class="copy">
           <p class="section-label">How it works</p>
           <h2>A calm layer between your apps and the cloud.</h2>
-          <p>Clients use the API they already know. ai-menshen handles provider credentials, model overrides, routing, retries, logging, and response reuse while keeping the control plane on your machine.</p>
+          <p>Clients use the API they already know. menshen handles provider credentials, model overrides, routing, retries, logging, and response reuse while keeping the control plane on your machine.</p>
         </div>
         <div class="flow-map" aria-label="Request flow diagram">
           <div class="flow-card client">
@@ -208,17 +208,17 @@
             <h3>YOUR CLIENTS</h3>
             <p>SDK · curl · OpenClaw</p>
           </div>
-          <div class="flow-arrow left"><span>OpenAI API</span></div>
+          <div class="flow-arrow left"><span>OpenAI / Anthropic</span></div>
           <div class="flow-card gateway">
             <span class="card-icon">✦</span>
-            <h3>AI-MENSHEN</h3>
+            <h3>MENSHEN</h3>
             <p>Auth injection · weighted routing · failover · cache · model override</p>
           </div>
           <div class="flow-arrow right"><span>forward / retry</span></div>
           <div class="flow-card provider">
             <span class="card-icon">◎</span>
             <h3>PROVIDERS</h3>
-            <p>OpenAI · DeepSeek · any compatible API</p>
+            <p>OpenAI · Claude · DeepSeek · any compatible API</p>
           </div>
           <div class="flow-arrow down"><span>audit + usage</span></div>
           <div class="flow-card storage">
@@ -255,19 +255,19 @@
       <header>
         <p class="section-label">Quick start</p>
         <h2>Up and running in four steps.</h2>
-        <p>Run the gateway locally, keep your keys in a TOML file, and point your existing OpenAI client at one stable endpoint.</p>
+        <p>Run the gateway locally, keep your keys in a TOML file, and point your existing OpenAI or Anthropic client at one stable endpoint.</p>
       </header>
       <ol class="quick-steps">
-        <li><strong>Install</strong><code>curl -fsSL https://jiacai2050.github.io/ai-menshen/install.sh | sh</code><span>Or build from source: clone the repo, then run <code>make build</code>.</span></li>
-        <li><strong>Configure</strong><code>ai-menshen -gen-config &gt; ~/.config/ai-menshen/config.toml</code><span>Add your provider API key.</span></li>
-        <li><strong>Run</strong><code>ai-menshen -config ~/.config/ai-menshen/config.toml</code><span>Starts the proxy on port 8080.</span></li>
-        <li><strong>Connect</strong><code>base_url = "http://localhost:8080"</code><span>Use any OpenAI-compatible SDK.</span></li>
+        <li><strong>Install</strong><code>curl -fsSL https://jiacai2050.github.io/menshen/install.sh | sh</code><span>Or build from source: clone the repo, then run <code>make build</code>.</span></li>
+        <li><strong>Configure</strong><code>menshen -gen-config &gt; ~/.config/menshen/config.toml</code><span>Add your provider API key.</span></li>
+        <li><strong>Run</strong><code>menshen -config ~/.config/menshen/config.toml</code><span>Starts the proxy on port 8080.</span></li>
+        <li><strong>Connect</strong><code>base_url = "http://localhost:8080"</code><span>Use any OpenAI or Anthropic SDK.</span></li>
       </ol>
     </section>
   </main>
 
   <footer>
-    <div class="wrap"><span>© 2026 ai-menshen · 门神</span><span>Built with Go · Powered by SQLite · <a href="https://github.com/jiacai2050/ai-menshen">Open source ↗</a></span></div>
+    <div class="wrap"><span>© 2026 menshen · 门神</span><span>Built with Go · Powered by SQLite · <a href="https://github.com/jiacai2050/menshen">Open source ↗</a></span></div>
   </footer>
 </body>
 </html>

@@ -1,6 +1,6 @@
-# Cache Design in ai-menshen
+# Cache Design in menshen
 
-This document describes the design and implementation of the request-response caching system in **ai-menshen**.
+This document describes the design and implementation of the request-response caching system in **menshen**.
 
 ## 1. Overview
 The goal of the caching system is to reduce latency and costs by instantly replaying responses for identical non-streaming requests. The system relies on a deterministic, collision-resistant **Cache Key** generated from the request's semantics.
@@ -18,7 +18,7 @@ A `CacheKey` is a SHA-256 hash of a normalized JSON representation of the reques
 To ensure that functionally identical requests produce the same key regardless of formatting, the system performs the following steps:
 
 ### A. Key Sorting (Determinism)
-JSON objects are unordered by nature. `ai-menshen` recursively sorts all keys in alphabetical order during serialization.
+JSON objects are unordered by nature. `menshen` recursively sorts all keys in alphabetical order during serialization.
 - **Example**: `{"a":1, "b":2}` and `{"b":2, "a":1}` produce the same hash.
 
 ### B. Field Exclusion (Semantics)
