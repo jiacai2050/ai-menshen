@@ -282,7 +282,20 @@ const (
 	sqlReqMessagesExpr = `CASE 
 		WHEN json_valid(rb.content) = 1 THEN 
 			COALESCE(
-				json_array_length(rb.content, '$.messages'),
+				CASE 
+					WHEN json_array_length(rb.content, '$.messages') IS NOT NULL THEN
+						json_array_length(rb.content, '$.messages') + 
+						CASE 
+							WHEN json_extract(rb.content, '$.system') IS NOT NULL 
+							     AND json_extract(rb.content, '$.system') != '' 
+							     AND json_extract(rb.content, '$.system') != '[]' THEN 1 
+							ELSE 0 
+						END
+					WHEN json_extract(rb.content, '$.system') IS NOT NULL 
+					     AND json_extract(rb.content, '$.system') != '' 
+					     AND json_extract(rb.content, '$.system') != '[]' THEN 1
+					ELSE NULL
+				END,
 				json_array_length(rb.content, '$.input'),
 				CASE WHEN json_extract(rb.content, '$.prompt') IS NOT NULL THEN 1 ELSE NULL END,
 				CASE WHEN json_extract(rb.content, '$.input') IS NOT NULL THEN 1 ELSE NULL END,
@@ -313,16 +326,18 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 			CASE 
 				WHEN json_valid(rb.content) = 1 THEN 
 					SUBSTR(
-						TRIM(COALESCE(
-							json_extract(rb.content, '$.messages[0].content[0].text'),
-							json_extract(rb.content, '$.messages[0].content'),
-							json_extract(rb.content, '$.messages[1].content[0].text'),
-							json_extract(rb.content, '$.messages[1].content'),
-							json_extract(rb.content, '$.prompt'),
-							json_extract(rb.content, '$.input[0]'),
-							json_extract(rb.content, '$.input'),
-							rb.content
-						)),
+						COALESCE(
+							NULLIF(TRIM(json_extract(rb.content, '$.system[0].text')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.system')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.messages[0].content[0].text')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.messages[0].content')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.messages[1].content[0].text')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.messages[1].content')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.prompt')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.input[0]')), ''),
+							NULLIF(TRIM(json_extract(rb.content, '$.input')), ''),
+							TRIM(rb.content)
+						),
 						1, 150
 					)
 				ELSE SUBSTR(TRIM(COALESCE(rb.content, '')), 1, 150)
@@ -330,12 +345,15 @@ func (s *Storage) RequestLogs(days int, limit int) ([]LogEntry, error) {
 			CASE 
 				WHEN json_valid(rsb.content) = 1 THEN 
 					SUBSTR(
-						TRIM(COALESCE(
-							json_extract(rsb.content, '$.choices[0].message.content'),
-							json_extract(rsb.content, '$.choices[0].text'),
-							json_extract(rsb.content, '$.error.message'),
-							rsb.content
-						)),
+						COALESCE(
+							NULLIF(TRIM(json_extract(rsb.content, '$.choices[0].message.content')), ''),
+							NULLIF(TRIM(json_extract(rsb.content, '$.choices[0].text')), ''),
+							NULLIF(TRIM(json_extract(rsb.content, '$.content[0].text')), ''),
+							NULLIF(TRIM(json_extract(rsb.content, '$.content[1].text')), ''),
+							NULLIF(TRIM(json_extract(rsb.content, '$.content[2].text')), ''),
+							NULLIF(TRIM(json_extract(rsb.content, '$.error.message')), ''),
+							TRIM(rsb.content)
+						),
 						1, 150
 					)
 				ELSE SUBSTR(TRIM(COALESCE(rsb.content, '')), 1, 150)

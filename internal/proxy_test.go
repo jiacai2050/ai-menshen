@@ -873,6 +873,33 @@ func TestRequestLogsMessagesCount(t *testing.T) {
 		nil,
 	)
 
+	// 4. Anthropic request with system prompt + messages, and response with thinking block + text block
+	reqBody4 := []byte(`{"system":"you are helpful","messages":[{"role":"user","content":[{"type":"text","text":"hello claude"}]}]}`)
+	respBody4 := []byte(`{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":"let me think"},{"type":"text","text":"hi human"}]}`)
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-anthropic", CreatedAt: time.Now(), Model: "claude-3-5-sonnet", Path: "/v1/messages", RequestBody: reqBody4},
+		ResponseLog{RequestID: "req-anthropic", StatusCode: 200, ResponseBody: respBody4},
+		nil,
+	)
+
+	// 5. Anthropic response where content[0].text is empty string, followed by content[1].text with real content
+	reqBody5 := []byte(`{"system":"","messages":[{"role":"user","content":"hello"}]}`) // empty system should not increment count
+	respBody5 := []byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":""},{"type":"text","text":"second block text"}]}`)
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-empty-fallback", CreatedAt: time.Now(), Model: "claude-3-5-sonnet", Path: "/v1/messages", RequestBody: reqBody5},
+		ResponseLog{RequestID: "req-empty-fallback", StatusCode: 200, ResponseBody: respBody5},
+		nil,
+	)
+
+	// 6. Request with system only (no messages array)
+	reqBody6 := []byte(`{"system":"system only instruction"}`)
+	respBody6 := []byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`)
+	_ = storage.saveExchangeSync(
+		RequestLog{ID: "req-system-only", CreatedAt: time.Now(), Model: "claude-3-5-sonnet", Path: "/v1/messages", RequestBody: reqBody6},
+		ResponseLog{RequestID: "req-system-only", StatusCode: 200, ResponseBody: respBody6},
+		nil,
+	)
+
 	logs, err := storage.RequestLogs(1, 10)
 	if err != nil {
 		t.Fatalf("RequestLogs() error = %v", err)
@@ -929,6 +956,48 @@ func TestRequestLogsMessagesCount(t *testing.T) {
 	}
 	if l3.ResponseMessages != 1 {
 		t.Errorf("req-stream ResponseMessages = %d, want 1", l3.ResponseMessages)
+	}
+
+	// Verify Anthropic request & response
+	l4, ok := byID["req-anthropic"]
+	if !ok {
+		t.Fatal("req-anthropic not found")
+	}
+	if l4.MessagesCount != 2 { // 1 system + 1 user message
+		t.Errorf("req-anthropic MessagesCount = %d, want 2", l4.MessagesCount)
+	}
+	if l4.ResponseMessages != 1 {
+		t.Errorf("req-anthropic ResponseMessages = %d, want 1", l4.ResponseMessages)
+	}
+	if l4.RequestBodyPreview != "you are helpful" {
+		t.Errorf("req-anthropic RequestBodyPreview = %q, want %q", l4.RequestBodyPreview, "you are helpful")
+	}
+	if l4.ResponseBodyPreview != "hi human" {
+		t.Errorf("req-anthropic ResponseBodyPreview = %q, want %q", l4.ResponseBodyPreview, "hi human")
+	}
+
+	// Verify empty string fallback: content[0].text is empty, should extract content[1].text
+	l5, ok := byID["req-empty-fallback"]
+	if !ok {
+		t.Fatal("req-empty-fallback not found")
+	}
+	if l5.MessagesCount != 1 { // system is "" so count should be 1 (only user message)
+		t.Errorf("req-empty-fallback MessagesCount = %d, want 1", l5.MessagesCount)
+	}
+	if l5.ResponseBodyPreview != "second block text" {
+		t.Errorf("req-empty-fallback ResponseBodyPreview = %q, want %q", l5.ResponseBodyPreview, "second block text")
+	}
+
+	// Verify system-only request
+	l6, ok := byID["req-system-only"]
+	if !ok {
+		t.Fatal("req-system-only not found")
+	}
+	if l6.MessagesCount != 1 {
+		t.Errorf("req-system-only MessagesCount = %d, want 1", l6.MessagesCount)
+	}
+	if l6.RequestBodyPreview != "system only instruction" {
+		t.Errorf("req-system-only RequestBodyPreview = %q, want %q", l6.RequestBodyPreview, "system only instruction")
 	}
 }
 

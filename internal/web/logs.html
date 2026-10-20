@@ -583,8 +583,22 @@
                                 const shortUrl = url.length > 60 ? url.slice(0, 60) + '...' : url;
                                 return `[Image: ${shortUrl}]`;
                             }
+                            if (part.type === 'image') {
+                                const mediaType = part.source?.media_type || 'image';
+                                return `[Image: ${mediaType}]`;
+                            }
+                            if (part.type === 'tool_use') {
+                                return `[Tool Use: ${part.name}(${JSON.stringify(part.input || {})})]`;
+                            }
+                            if (part.type === 'tool_result') {
+                                const text = typeof part.content === 'string' ? part.content : this.formatContentPart(part.content);
+                                return `[Tool Result: ${text}]`;
+                            }
+                            if (part.type === 'thinking') {
+                                return part.thinking || '';
+                            }
                             return JSON.stringify(part);
-                        }).join('\n\n');
+                        }).filter(Boolean).join('\n\n');
                     }
                     if (typeof content === 'object') {
                         return JSON.stringify(content, null, 2);
@@ -603,13 +617,23 @@
                     if (rawReq) {
                         try {
                             const parsed = JSON.parse(rawReq);
-                            if (Array.isArray(parsed.messages)) {
-                                reqMessages = parsed.messages.map(m => ({
-                                    role: m.role || 'user',
-                                    content: this.formatContentPart(m.content),
-                                    tool_calls: m.tool_calls,
+                            // Support Anthropic top-level system prompt
+                            if (parsed.system) {
+                                reqMessages.push({
+                                    role: 'system',
+                                    content: this.formatContentPart(parsed.system),
                                     _collapsed: false
-                                }));
+                                });
+                            }
+                            if (Array.isArray(parsed.messages)) {
+                                for (const m of parsed.messages) {
+                                    reqMessages.push({
+                                        role: m.role || 'user',
+                                        content: this.formatContentPart(m.content),
+                                        tool_calls: m.tool_calls,
+                                        _collapsed: false
+                                    });
+                                }
                             } else if (parsed.prompt) {
                                 prompt = this.formatContentPart(parsed.prompt);
                             } else if (parsed.input) {
@@ -618,7 +642,7 @@
 
                             // Extract key parameters
                             for (const [k, v] of Object.entries(parsed)) {
-                                if (!['messages', 'prompt', 'input'].includes(k)) {
+                                if (!['messages', 'prompt', 'input', 'system'].includes(k)) {
                                     reqParams.push({
                                         key: k,
                                         value: typeof v === 'object' ? JSON.stringify(v) : String(v)
@@ -649,8 +673,11 @@
                     let toolCalls = null;
 
                     if (rawResp) {
-                        // Check for SSE Stream format
-                        if (rawResp.includes('data:') && (rawResp.includes('[DONE]') || rawResp.includes('"delta"'))) {
+                        // Check for SSE Stream format (supports OpenAI and Anthropic SSE)
+                        const trimmedResp = rawResp.trim();
+                        const isSSE = (trimmedResp.startsWith('data:') || trimmedResp.startsWith('event:')) &&
+                            (rawResp.includes('data:') && (rawResp.includes('[DONE]') || rawResp.includes('"delta"') || rawResp.includes('content_block_delta') || rawResp.includes('message_stop') || rawResp.includes('event: message_start')));
+                        if (isSSE) {
                             isStream = true;
                             const lines = rawResp.split('\n');
                             for (const line of lines) {
@@ -660,6 +687,7 @@
                                 if (!payload || payload === '[DONE]') continue;
                                 try {
                                     const chunk = JSON.parse(payload);
+                                    // OpenAI SSE format
                                     if (chunk.choices && chunk.choices[0]) {
                                         const c = chunk.choices[0];
                                         const delta = c.delta || {};
@@ -672,7 +700,45 @@
                                             toolCalls.push(...delta.tool_calls);
                                         }
                                     }
+                                    // Anthropic SSE format
+                                    else if (chunk.type) {
+                                        if (chunk.type === 'message_start' && chunk.message) {
+                                            if (chunk.message.role) respRole = chunk.message.role;
+                                        } else if (chunk.type === 'content_block_start' && chunk.content_block) {
+                                            if (chunk.content_block.type === 'tool_use') {
+                                                if (!toolCalls) toolCalls = [];
+                                                toolCalls.push(chunk.content_block);
+                                            }
+                                        } else if (chunk.type === 'content_block_delta' && chunk.delta) {
+                                            if (chunk.delta.type === 'text_delta') {
+                                                respContent += (chunk.delta.text || '');
+                                            } else if (chunk.delta.type === 'thinking_delta') {
+                                                respReasoning += (chunk.delta.thinking || '');
+                                            } else if (chunk.delta.type === 'input_json_delta') {
+                                                if (toolCalls && toolCalls.length > 0) {
+                                                    const lastTool = toolCalls[toolCalls.length - 1];
+                                                    lastTool._raw_json = (lastTool._raw_json || '') + (chunk.delta.partial_json || '');
+                                                }
+                                            }
+                                        } else if (chunk.type === 'message_delta' && chunk.delta) {
+                                            if (chunk.delta.stop_reason) respFinish = chunk.delta.stop_reason;
+                                        }
+                                    }
                                 } catch (e) {}
+                            }
+
+                            // Reconstruct input JSON for streamed tool calls
+                            if (toolCalls && toolCalls.length > 0) {
+                                for (const t of toolCalls) {
+                                    if (t._raw_json) {
+                                        try {
+                                            t.input = JSON.parse(t._raw_json);
+                                        } catch (e) {
+                                            t.input = { _raw: t._raw_json };
+                                        }
+                                        delete t._raw_json;
+                                    }
+                                }
                             }
                         } else {
                             // Standard JSON response
@@ -681,6 +747,7 @@
                                 if (parsed.error) {
                                     respError = parsed.error.message || JSON.stringify(parsed.error);
                                 }
+                                // OpenAI format
                                 if (Array.isArray(parsed.choices) && parsed.choices[0]) {
                                     const c = parsed.choices[0];
                                     const m = c.message || {};
@@ -689,6 +756,29 @@
                                     if (m.reasoning_content) respReasoning = m.reasoning_content;
                                     if (c.finish_reason) respFinish = c.finish_reason;
                                     if (m.tool_calls) toolCalls = m.tool_calls;
+                                }
+                                // Anthropic format
+                                else if (parsed.content !== undefined && (parsed.type === 'message' || parsed.role)) {
+                                    if (parsed.role) respRole = parsed.role;
+                                    if (parsed.stop_reason) respFinish = parsed.stop_reason;
+                                    if (Array.isArray(parsed.content)) {
+                                        let textParts = [];
+                                        for (const block of parsed.content) {
+                                            if (block.type === 'text') {
+                                                textParts.push(block.text || '');
+                                            } else if (block.type === 'thinking') {
+                                                respReasoning += (block.thinking || '');
+                                            } else if (block.type === 'tool_use') {
+                                                if (!toolCalls) toolCalls = [];
+                                                toolCalls.push(block);
+                                            } else {
+                                                textParts.push(this.formatContentPart(block));
+                                            }
+                                        }
+                                        respContent = textParts.join('\n\n');
+                                    } else if (typeof parsed.content === 'string') {
+                                        respContent = parsed.content;
+                                    }
                                 }
                             } catch (e) {
                                 respContent = rawResp;

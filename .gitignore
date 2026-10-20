@@ -4,3 +4,4 @@ configs/config.toml
 *.db
 *.db-wal
 *.db-shm
+docs/review.md
