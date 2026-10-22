@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestAnthropicProtocolPrepareBodyAndHeaders(t *testing.T) {
@@ -324,6 +323,9 @@ func TestAnthropicProxyEndToEnd(t *testing.T) {
 		t.Error("expected first request to be a cache miss")
 	}
 
+	// Wait for worker goroutine to commit exchange transaction into SQLite
+	waitForRequestLogs(t, storage, 1)
+
 	// 2. Second request -> hits cache!
 	req2 := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(body))
 	rec2 := httptest.NewRecorder()
@@ -337,7 +339,6 @@ func TestAnthropicProxyEndToEnd(t *testing.T) {
 	}
 
 	// 3. Check usage logged in storage
-	time.Sleep(50 * time.Millisecond)
 	logs, err := storage.RequestLogs(1, 10)
 	if err != nil {
 		t.Fatalf("RequestLogs failed: %v", err)
@@ -499,14 +500,7 @@ func TestAnthropicStreamingProxyEndToEnd(t *testing.T) {
 	}
 
 	// Wait for worker goroutine to commit exchange transaction into SQLite
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		logs, _ := storage.RequestLogs(1, 10)
-		if len(logs) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRequestLogs(t, storage, 1)
 
 	// 2. Second request should hit stream cache!
 	req2 := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader(body))
@@ -601,14 +595,7 @@ func TestExplicitProviderCacheHitWithoutCapability(t *testing.T) {
 	}
 
 	// Wait for worker goroutine to commit exchange transaction into SQLite
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		logs, _ := storage.RequestLogs(1, 10)
-		if len(logs) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRequestLogs(t, storage, 1)
 
 	// 2. Request explicitly targeting 'openai' (/provider/openai/messages) with identical body.
 	// Even though 'openai' does NOT support anthropic-messages, provider-agnostic cache MUST
@@ -786,16 +773,8 @@ func TestMultiProviderModelOverrideSelection(t *testing.T) {
 	}
 
 	// Verify logged model in storage corresponds to the selected provider's model
-	deadline := time.Now().Add(2 * time.Second)
-	var loggedModel string
-	for time.Now().Before(deadline) {
-		logs, err := storage.RequestLogs(1, 10)
-		if err == nil && len(logs) > 0 {
-			loggedModel = logs[0].Model
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	logs := waitForRequestLogs(t, storage, 1)
+	loggedModel := logs[0].Model
 	if loggedModel != "claude-3-5-sonnet-overridden" {
 		t.Errorf("logged model = %q, want 'claude-3-5-sonnet-overridden'", loggedModel)
 	}

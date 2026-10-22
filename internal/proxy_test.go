@@ -263,24 +263,10 @@ func TestServeAPIHTTPSingleProviderNetworkErrorKeepsUpstreamCause(t *testing.T) 
 	}
 
 	// saveExchange is asynchronous; wait for the worker to flush.
-	var detail *LogDetail
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		logs, err := storage.RequestLogs(1, 10)
-		if err != nil {
-			t.Fatalf("RequestLogs() error = %v", err)
-		}
-		if len(logs) > 0 {
-			detail, err = storage.RequestDetail(logs[0].ID)
-			if err != nil {
-				t.Fatalf("RequestDetail() error = %v", err)
-			}
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if detail == nil {
-		t.Fatal("stored exchange not found")
+	logs := waitForRequestLogs(t, storage, 1)
+	detail, err := storage.RequestDetail(logs[0].ID)
+	if err != nil {
+		t.Fatalf("RequestDetail() error = %v", err)
 	}
 	if !strings.Contains(detail.ResponseBody, "send upstream request") {
 		t.Errorf("stored response body = %q, want upstream error cause", detail.ResponseBody)
@@ -343,24 +329,10 @@ func TestServeAPIHTTPFailoverKeepsMetadataOfReturnedResponse(t *testing.T) {
 		t.Fatalf("status code = %d, want 500", rec.Code)
 	}
 
-	var detail *LogDetail
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		logs, err := storage.RequestLogs(1, 10)
-		if err != nil {
-			t.Fatalf("RequestLogs() error = %v", err)
-		}
-		if len(logs) > 0 {
-			detail, err = storage.RequestDetail(logs[0].ID)
-			if err != nil {
-				t.Fatalf("RequestDetail() error = %v", err)
-			}
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if detail == nil {
-		t.Fatal("stored exchange not found")
+	logs := waitForRequestLogs(t, storage, 1)
+	detail, err := storage.RequestDetail(logs[0].ID)
+	if err != nil {
+		t.Fatalf("RequestDetail() error = %v", err)
 	}
 	if detail.Provider != "secondary" {
 		t.Errorf("stored provider = %q, want secondary", detail.Provider)
@@ -759,16 +731,8 @@ func TestProxyStreamClientCanceledLogs499(t *testing.T) {
 
 	gateway.ServeAPIHTTP(cancelAfterFirst, req)
 
-	// Wait briefly for async log saving to settle
-	time.Sleep(50 * time.Millisecond)
-
-	logs, err := storage.RequestLogs(1, 10)
-	if err != nil {
-		t.Fatalf("RequestLogs() error = %v", err)
-	}
-	if len(logs) == 0 {
-		t.Fatal("expected request log to be saved")
-	}
+	// Wait for worker goroutine to process exchange
+	logs := waitForRequestLogs(t, storage, 1)
 	if logs[0].StatusCode != 499 {
 		t.Fatalf("status code in storage = %d, want 499 (Client Closed Request)", logs[0].StatusCode)
 	}
@@ -1558,14 +1522,7 @@ func TestStreamingProxyDoesNotCacheWhenExceedingMaxBodyBytes(t *testing.T) {
 			}
 
 			// Wait for worker goroutine to process exchange
-			deadline := time.Now().Add(2 * time.Second)
-			for time.Now().Before(deadline) {
-				logs, _ := storage.RequestLogs(1, 10)
-				if len(logs) > 0 {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
+			waitForRequestLogs(t, storage, 1)
 
 			// 2. Second request should NOT hit cache because response exceeded MaxBodyBytes
 			req2 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body))
@@ -1649,14 +1606,7 @@ func TestIncompleteStreamNotCachedWithDefaultLogging(t *testing.T) {
 	}
 
 	// Wait for worker goroutine to process exchange
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		logs, _ := storage.RequestLogs(1, 10)
-		if len(logs) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRequestLogs(t, storage, 1)
 
 	// 2. Second request: even with LogResponseBody=true, incomplete stream must NOT hit cache!
 	req2 := httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(body))
@@ -1672,4 +1622,21 @@ func TestIncompleteStreamNotCachedWithDefaultLogging(t *testing.T) {
 	if atomic.LoadInt32(&upstreamHits) != 2 {
 		t.Errorf("upstreamHits = %d, want 2 (incomplete stream must not be cached)", upstreamHits)
 	}
+}
+
+func waitForRequestLogs(t testing.TB, storage *Storage, minCount int) []LogEntry {
+	t.Helper()
+	if minCount <= 0 {
+		minCount = 1
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		logs, err := storage.RequestLogs(1, 100)
+		if err == nil && len(logs) >= minCount {
+			return logs
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for at least %d request log(s)", minCount)
+	return nil
 }
