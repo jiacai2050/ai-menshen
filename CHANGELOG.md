@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v1.5.0 (2026-10-23)
+
+### Breaking Changes
+- Project renamed from `ai-menshen` to `menshen`: module path, binary name, service files (`menshen.service`, `net.liujiacai.menshen.plist`), and install script all follow the new name. Existing installs need to update service/unit files and call the new `menshen` binary.
+
+### Added
+- **Anthropic Messages Support**: New `Protocol` abstraction supporting multiple LLM API formats. Requests to `/messages` and `/v1/messages` are proxied natively in the Anthropic format, with usage extraction, audit log storage, and dashboard previews (thinking blocks, tool use, system prompts) rendered correctly.
+- **Protocol Capability Routing**: Providers declare `capabilities` (`openai-completions`, `anthropic-messages`, default `openai-completions`). Requests are load-balanced only across providers supporting the matched capability, and failover stays strictly within that set. Explicit `/provider/<name>` selection validates capability and returns HTTP `400` on mismatch (cache miss).
+
+### Changed
+- Failover is refactored into a single centralized path and is now context-aware: retries stop as soon as the client disconnects.
+
 ### Fixed
 - 502 responses now keep the upstream error cause: it is appended to the `[502]` ERROR log line and stored as the response body in the audit log. Previously the cause was dropped when failover did not run (explicit `/provider/<name>`, failover disabled, or a single provider).
 
